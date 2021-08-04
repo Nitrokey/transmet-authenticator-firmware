@@ -1,0 +1,104 @@
+[package]
+name = "runner"
+version = "0.0.1"
+authors = ["Jan Nordholz <j.nordholz@tu-berlin.de", "Artem Yurchenko <artem.yurchenko@ptb.de>"]
+edition = "2018"
+license = "ISC"
+resolver = "2"
+
+[dependencies]
+nrf52840-hal = { git = "https://github.com/Nitrokey/nrf-hal/", rev = "228ccb0" }
+nrf52840-pac = "*"
+picolcd114 = { git = "https://github.com/Nitrokey/picolcd114/" }
+cortex-m = "0.6"
+cortex-m-rt = "0.6"
+cortex-m-rtic = "0.5"
+cortex-m-semihosting = { version = "0.3", optional = true }
+asm-delay = "*"
+# delog = "0.1.1"
+# heapless = "0.6"
+# interchange = "0.2.0"
+# nb = "1"
+rtt-target = { version = "0.3", features = ["cortex-m"] }
+usb-device = "0.2"
+usbd-hid = "0.4"
+# usbd-serial = "0.1"
+embedded-graphics = "0.6"
+display-interface-spi = "*"
+generic-array = "0.14"
+rand_core = "0.6"
+chacha20 = { version = "0.7", default-features = false, features = ["rng"] }
+
+apdu-dispatch = { git = "https://github.com/solokeys/apdu-dispatch", branch = "main" }
+ctap-types = { git = "https://github.com/solokeys/ctap-types", branch = "main" }
+fido-authenticator = { git = "https://github.com/solokeys/fido-authenticator", branch = "main", optional = true }
+oath-authenticator = { git = "https://github.com/trussed-dev/oath-authenticator", branch = "main", features = ["apdu-dispatch"], optional = true }
+piv-authenticator = { git = "https://github.com/solokeys/piv-authenticator", branch = "main", features = ["apdu-dispatch"], optional = true }
+trussed = { git = "https://github.com/trussed-dev/trussed", branch = "main" }
+
+# components
+dispatch-fido = {path = "../../components/dispatch-fido"}
+ndef-app = { path = "../../components/ndef-app", optional = true }
+admin-app = { path = "../../components/admin-app", optional = true }
+# NB: when using this app, need to raise trussed/clients-5
+provisioner-app = { path = "../../components/provisioner-app", optional = true }
+c-stubs = { path = "../../components/c-stubs" }
+fm11nc08 = {path = "../../components/fm11nc08"}
+ctaphid-dispatch = {path = "../../components/ctaphid-dispatch"}
+nfc-device = {path = "../../components/nfc-device"}
+usbd-ccid = { path = "../../components/usbd-ccid" }
+usbd-ctaphid = { path = "../../components/usbd-ctaphid" }
+
+# panic
+panic-halt = "0.2.0"
+# panic-semihosting = "0.5.6"
+
+# storage
+littlefs2 = "0.3.1"
+
+[features]
+default = ["admin-app", "fido-authenticator", "ndef-app", "oath-authenticator", "piv-authenticator", "trussed/clients-4"]
+
+develop = ["no-encrypted-storage", "no-reset-time-window", "trussed/clients-4"]
+develop-provisioner = ["no-encrypted-storage", "no-reset-time-window", "provisioner-app", "trussed/clients-5"]
+
+# Do not use encryption for the filesystem
+no-encrypted-storage = []
+
+# Check for undefined flash and write to determined value (for prince provisioning)
+write-undefined-flash = []
+
+# Allow resetting FIDO authenticator (and possibly others) even after 10s uptime
+no-reset-time-window = ["fido-authenticator/disable-reset-time-window"]
+
+# Format filesystem anyway
+format-filesystem = []
+
+board-nrfdk = []
+board-proto1 = []
+
+log-rtt = []
+log-semihosting = []
+log-serial = []
+
+log-all = []
+log-none = []
+log-info = []
+log-debug = []
+log-warn = []
+log-error = []
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "z"
+incremental = false
+debug = true
+
+# Speed up crypto packages
+[profile.release.package.salty]
+opt-level = 2
+
+# TODO: see which if any settings are best for p256-cortex-m4
+# [profile.release.package.nisty]
+# opt-level = 2
