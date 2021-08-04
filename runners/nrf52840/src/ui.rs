@@ -157,6 +157,9 @@ pub struct Display {
 }
 
 impl Display {
+	/* Maybe we need the CS pin down here as well. The display is the only client
+	   on this bus, but maybe GPIO state doesn't persist in deep sleep states, so the
+	   pin might require reconfiguration */
 
 	pub fn new(lld: LLDisplay, bl_pin: OutPin, pwr_gate: Option<OutPin>) -> Self {
 		Self { lldisplay: lld, backlight_pin: bl_pin, power_gate: pwr_gate }

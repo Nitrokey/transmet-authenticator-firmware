@@ -4,6 +4,7 @@ use nrf52840_pac::{
 use nrf52840_hal::{
 	gpio::{p0, p1, Level},
 	gpiote::Gpiote,
+	spim,
 };
 
 use crate::types::*;
@@ -53,6 +54,12 @@ pub fn init_gpio(gpiote: &Gpiote, gpio_p0: p0::Parts, gpio_p1: p1::Parts) -> Boa
 	let dsp_spi_bl = gpio_p1.p1_15.into_push_pull_output(Level::High).degrade();
 	// no power gate
 
+	let dsp_spi = spim::Pins {
+		sck: dsp_spi_clk,
+		miso: None,
+		mosi: Some(dsp_spi_mosi)
+	};
+
 	BoardGPIO { buttons: [
 			Some(btn1), Some(btn2), Some(btn3), Some(btn4),
 			Some(btn5), Some(btn6), Some(btn7), Some(btn8) ],
@@ -61,9 +68,16 @@ pub fn init_gpio(gpiote: &Gpiote, gpio_p0: p0::Parts, gpio_p1: p1::Parts) -> Boa
 		uart_tx: Some(u_tx),
 		uart_cts: None,
 		uart_rts: None,
-		display_spi: [
-			Some(dsp_spi_bl), Some(dsp_spi_clk), Some(dsp_spi_cs), Some(dsp_spi_dc),
-			Some(dsp_spi_mosi), None, Some(dsp_spi_rst) ],
-		display_spi_miso: None,
+		display_spi: Some(dsp_spi),
+		display_cs: Some(dsp_spi_cs),
+		display_reset: Some(dsp_spi_rst),
+		display_dc: Some(dsp_spi_dc),
+		display_backlight: Some(dsp_spi_bl),
+		display_power: None,
+		flashnfc_spi: None,
+		flash_cs: None,
+		flash_power: None,
+		nfc_cs: None,
+		nfc_irq: None,
 	}
 }

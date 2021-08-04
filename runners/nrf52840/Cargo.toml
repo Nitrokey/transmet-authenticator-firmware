@@ -58,35 +58,25 @@ littlefs2 = "0.3.1"
 
 [features]
 default = ["admin-app", "fido-authenticator", "ndef-app", "oath-authenticator", "piv-authenticator", "trussed/clients-4"]
-
 develop = ["no-encrypted-storage", "no-reset-time-window", "trussed/clients-4"]
 develop-provisioner = ["no-encrypted-storage", "no-reset-time-window", "provisioner-app", "trussed/clients-5"]
 
-# Do not use encryption for the filesystem
-no-encrypted-storage = []
-
-# Check for undefined flash and write to determined value (for prince provisioning)
-write-undefined-flash = []
-
 # Allow resetting FIDO authenticator (and possibly others) even after 10s uptime
 no-reset-time-window = ["fido-authenticator/disable-reset-time-window"]
+no-encrypted-storage = []
 
-# Format filesystem anyway
-format-filesystem = []
+# active peripherals
+periph-flash = []
+periph-nfc = []
+periph-secelem = []
+periph-display = []
 
-board-nrfdk = []
-board-proto1 = []
+# can we use UARTE0 for debugging?
+debug-uarte0 = []
 
-log-rtt = []
-log-semihosting = []
-log-serial = []
-
-log-all = []
-log-none = []
-log-info = []
-log-debug = []
-log-warn = []
-log-error = []
+# compose features from board selection
+board-nrfdk = ["debug-uarte0", "periph-display"]
+board-proto1 = ["periph-nfc", "periph-flash", "periph-secelem", "periph-display"]
 
 [profile.release]
 codegen-units = 1

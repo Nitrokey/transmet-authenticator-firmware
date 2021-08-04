@@ -21,12 +21,13 @@ use trussed::types::{LfsResult, LfsStorage};
 use crate::board_nrfdk as board;
 #[cfg(feature = "board-proto1")]
 use crate::board_proto1 as board;
-use crate::types::display_spi_pins::*;
 
 #[cfg(not(any(feature = "board-nrfdk", feature = "board-proto1")))]
 compile_error!{"No board target chosen! Set your board using --feature; see Cargo.toml."}
 
+#[cfg(feature = "board-nrfdk")]
 mod board_nrfdk;
+#[cfg(feature = "board-proto1")]
 mod board_proto1;
 mod rle;
 mod types;
@@ -117,24 +118,19 @@ const APP: () = {
 
 		rtt_target::rprintln!("Display");
 
-		let spi_pins = nrf52840_hal::spim::Pins {
-			sck: board_gpio.display_spi[DISPLAY_SPI_CLK].take().unwrap(),
-			miso: board_gpio.display_spi_miso,
-			mosi: board_gpio.display_spi[DISPLAY_SPI_MOSI].take()
-		};
-		let spi = Spim::new(ctx.device.SPIM0, spi_pins,
+		let spi = Spim::new(ctx.device.SPIM0, board_gpio.display_spi.take().unwrap(),
 			nrf52840_hal::spim::Frequency::M8,
 			nrf52840_hal::spim::MODE_3,
 			0x7e_u8,
 		);
-		let di_spi = display_interface_spi::SPIInterfaceNoCS::new(spi, board_gpio.display_spi[DISPLAY_SPI_DC].take().unwrap());
-		let mut dsp_st7789 = picolcd114::ST7789::new(di_spi, board_gpio.display_spi[DISPLAY_SPI_RST].take().unwrap(), 240, 135, 40, 53);
+		let di_spi = display_interface_spi::SPIInterfaceNoCS::new(spi, board_gpio.display_dc.take().unwrap());
+		let mut dsp_st7789 = picolcd114::ST7789::new(di_spi, board_gpio.display_reset.take().unwrap(), 240, 135, 40, 53);
 
 		dsp_st7789.init(&mut delay_provider).unwrap();
 
 		let disp = ui::Display::new(dsp_st7789,
-				board_gpio.display_spi[DISPLAY_SPI_BL].take().unwrap(),
-				board_gpio.display_spi[DISPLAY_SPI_POWER].take());
+				board_gpio.display_backlight.take().unwrap(),
+				board_gpio.display_power.take());
 		let ui = ui::StickUI::new(disp, board_gpio.buttons, board_gpio.leds);
 
 		/* WIP: put together our hacked up LEGO bricks to create the Trussed service instance */
