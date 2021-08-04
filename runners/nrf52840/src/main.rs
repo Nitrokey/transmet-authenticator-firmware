@@ -17,22 +17,20 @@ use nrf52840_hal::{
 use rand_core::SeedableRng;
 use trussed::types::{LfsResult, LfsStorage};
 
+#[cfg(feature = "board-nrfdk")]
+use crate::board_nrfdk as board;
+#[cfg(feature = "board-proto1")]
+use crate::board_proto1 as board;
+use crate::types::display_spi_pins::*;
+
+#[cfg(not(any(feature = "board-nrfdk", feature = "board-proto1")))]
+compile_error!{"No board target chosen! Set your board using --feature; see Cargo.toml."}
+
 mod board_nrfdk;
 mod board_proto1;
 mod rle;
 mod types;
 mod ui;
-
-#[cfg(feature = "board-nrfdk")]
-use crate::board_nrfdk as board;
-
-#[cfg(feature = "board-proto1")]
-use crate::board_proto1 as board;
-
-use crate::types::display_spi_pins::*;
-
-#[cfg(not(any(feature = "board-nrfdk", feature = "board-proto1")))]
-compile_error!{"No board target chosen! Set your board using --feature; see Cargo.toml."}
 
 static TRUSSED_LOGO_RLE: &[u8; 4582] = include_bytes!("../trussed_logo.img.rle");
 
