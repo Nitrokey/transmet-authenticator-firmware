@@ -1,5 +1,5 @@
 use nrf52840_hal::{
-	gpio::{Pin, Input, Floating, Output, PushPull, PullUp},
+	gpio::{Pin, Input, Floating, Output, PushPull, PullDown, PullUp},
 	spim,
 };
 
@@ -10,6 +10,8 @@ pub struct BoardGPIO {
 	pub uart_tx: Option<Pin<Output<PushPull>>>,
 	pub uart_cts: Option<Pin<Input<Floating>>>,
 	pub uart_rts: Option<Pin<Output<PushPull>>>,
+	pub fpr_detect: Option<Pin<Input<PullDown>>>,
+	pub fpr_power: Option<Pin<Output<PushPull>>>,
 	pub display_spi: Option<spim::Pins>,
 	pub display_cs: Option<Pin<Output<PushPull>>>,
 	pub display_reset: Option<Pin<Output<PushPull>>>,

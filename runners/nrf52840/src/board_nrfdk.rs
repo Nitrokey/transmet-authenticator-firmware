@@ -68,6 +68,8 @@ pub fn init_gpio(gpiote: &Gpiote, gpio_p0: p0::Parts, gpio_p1: p1::Parts) -> Boa
 		uart_tx: Some(u_tx),
 		uart_cts: None,
 		uart_rts: None,
+		fpr_detect: None,
+		fpr_power: None,
 		display_spi: Some(dsp_spi),
 		display_cs: Some(dsp_spi_cs),
 		display_reset: Some(dsp_spi_rst),

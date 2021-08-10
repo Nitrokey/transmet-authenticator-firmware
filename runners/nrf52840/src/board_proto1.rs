@@ -41,12 +41,12 @@ pub fn init_gpio(gpiote: &Gpiote, gpio_p0: p0::Parts, gpio_p1: p1::Parts) -> Boa
 	};
 
 	/* Fingerprint */
-	let _fp_tx = gpio_p0.p0_12.into_push_pull_output(Level::Low).degrade();
-	let _fp_rx = gpio_p0.p0_11.into_pullup_input().degrade();
-	let _fp_detect = gpio_p1.p1_09.into_pulldown_input().degrade();
-	let _fp_pwr = gpio_p0.p0_15.into_push_pull_output(Level::High).degrade();
+	let fp_tx = gpio_p0.p0_12.into_push_pull_output(Level::Low).degrade();
+	let fp_rx = gpio_p0.p0_11.into_floating_input().degrade();
+	let fp_detect = gpio_p1.p1_09.into_pulldown_input().degrade();
+	let fp_pwr = gpio_p0.p0_15.into_push_pull_output(Level::High).degrade();
 
-	gpiote.port().input_pin(&_fp_detect).high();
+	gpiote.port().input_pin(&fp_detect).high();
 
 	/* Flash & NFC SPI Bus */
 	let flash_spi_cs = gpio_p0.p0_25.into_push_pull_output(Level::High).degrade();
@@ -67,10 +67,12 @@ pub fn init_gpio(gpiote: &Gpiote, gpio_p0: p0::Parts, gpio_p1: p1::Parts) -> Boa
 			Some(btn1), Some(btn2), Some(btn3), None,
 			None, None, None, None ],
 		leds: [ None, None, None, None ],
-		uart_rx: None,
-		uart_tx: None,
+		uart_rx: Some(fp_rx),
+		uart_tx: Some(fp_tx),
 		uart_cts: None,
 		uart_rts: None,
+		fpr_detect: Some(fp_detect),
+		fpr_power: Some(fp_pwr),
 		display_spi: Some(dsp_spi),
 		display_cs: Some(dsp_spi_cs),
 		display_reset: Some(dsp_rst),
