@@ -15,7 +15,10 @@ use nrf52840_hal::{
 	uarte::{Baudrate, Parity, Uarte},
 };
 use rand_core::SeedableRng;
-use trussed::types::{LfsResult, LfsStorage};
+use trussed::{
+	Interchange,
+	types::{LfsResult, LfsStorage},
+};
 
 #[cfg(feature = "board-nrfdk")]
 use crate::board_nrfdk as board;
@@ -34,13 +37,6 @@ mod types;
 mod ui;
 
 static TRUSSED_LOGO_RLE: &[u8; 4582] = include_bytes!("../trussed_logo.img.rle");
-
-static FIDO_HID_REPORT_DESCRIPTOR: [u8; 34] = [
-	0x06, 0xd0, 0xf1, 0x09, 0x01, 0xa1, 0x01,	// header
-	0x09, 0x03, 0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08, 0x95, 0x40, 0x81, 0x08,	// report
-	0x09, 0x04, 0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08, 0x95, 0x40, 0x91, 0x08,	// report
-	0xc0,
-];
 
 /* Temporary Hack #2: a Trussed Store that exists solely in RAM (no persistence!) */
 littlefs2::const_ram_storage!(InternalStore, 1024);
@@ -61,6 +57,13 @@ trussed::platform!(
 	UI: ui::WrappedUI,
 );
 
+pub struct NRFSyscall {}
+impl trussed::platform::Syscall for NRFSyscall {
+	fn syscall(&mut self) {
+		rtic::pend(nrf52840_hal::pac::Interrupt::SWI0_EGU0);
+	}
+}
+
 #[rtic::app(device = nrf52840_hal::pac, peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
 	struct Resources {
@@ -75,6 +78,7 @@ const APP: () = {
 		// hidclass: HIDClass<'static, Usbd<UsbPeripheral<'static>>>,
 		power: nrf52840_hal::pac::POWER,
 		rtc: Rtc<nrf52840_hal::pac::RTC0>,
+		fido_app: dispatch_fido::Fido<fido_authenticator::NonSilentAuthenticator, trussed::ClientImplementation<NRFSyscall>>,
 	}
 
 	#[init(spawn = [frontend])]
@@ -148,7 +152,17 @@ const APP: () = {
 			ui::WrappedUI::new()
 		);
 
-		let srv = trussed::service::Service::new(stickplat);
+		let mut srv = trussed::service::Service::new(stickplat);
+
+		rtt_target::rprintln!("Apps");
+
+		let fido_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
+		let mut fido_lfs2_path = littlefs2::path::PathBuf::new();
+		fido_lfs2_path.push(littlefs2::path::Path::from_bytes_with_nul(b"fido\0").unwrap());
+		srv.add_endpoint(fido_trussed_xch.1, fido_lfs2_path);
+		let fido_trussed_client = trussed::ClientImplementation::<NRFSyscall>::new(fido_trussed_xch.0, NRFSyscall {});
+		let fido_auth = fido_authenticator::Authenticator::new(fido_trussed_client, fido_authenticator::NonSilentAuthenticator {});
+		let fido_app = dispatch_fido::Fido::<fido_authenticator::NonSilentAuthenticator, trussed::ClientImplementation<NRFSyscall>>::new(fido_auth);
 
 		rtt_target::rprintln!("USB");
 
@@ -176,12 +190,13 @@ const APP: () = {
 			// usbctl,
 			usbctl_proxy,
 			power,
-			rtc
+			rtc,
+			fido_app
 		}
 	}
 
 	#[idle()]
-	fn idle(_ctx: idle::Context) -> ! {
+	fn idle(ctx: idle::Context) -> ! {
 		/*
 		   Note: ARM SysTick stops in WFI. This is unfortunate as
 		   - RTIC uses SysTick for its schedule() feature
@@ -193,14 +208,26 @@ const APP: () = {
 		// loop {}
 	}
 
-	#[task(resources = [rtc, ui])]
+	#[task(resources = [rtc, ui, usbctl_proxy, fido_app])]
 	fn frontend(ctx: frontend::Context) {
+		let usbctl = ctx.resources.usbctl_proxy.access();
+
+		if let ui::USBControllerEnum::Real(r) = usbctl {
+			if r.poll_apps(&mut [ctx.resources.fido_app]) {
+				rtic::pend(nrf52840_hal::pac::Interrupt::USBD);
+			}
+		}
+
 		/*
 		   This is the function where we perform least-urgency stuff, like rendering
 		   display contents.
 		*/
 		let rtc_time = ctx.resources.rtc.get_counter();
 		ctx.resources.ui.refresh(rtc_time);
+	}
+
+	#[task(binds = SWI0_EGU0, resources = [trussed_service])]
+	fn irq_trussed(ctx: irq_trussed::Context) {
 	}
 
 	#[task(binds = GPIOTE, resources = [uart, power, gpiote, ui])]
@@ -257,7 +284,7 @@ const APP: () = {
 	}
 
 	extern "C" {
-		fn SWI0_EGU0();
+		fn SWI5_EGU5();
 	}
 };
 

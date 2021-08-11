@@ -34,3 +34,26 @@ src/main.rs:		RTIC App idle()
 -> ???			apps.apdu_dispatch(|a| apu_dispatch.poll(a))
 -> ???			apps.ctaphid_dispatch(|a| ctaphid_dispatch.poll(a))
 -> ???			usb_classes.poll()
+
+## USB Apps Lifecycle
+
+### CTAP HID
+
+1. create request/response interchange pair
+
+	ctaphid_dispatch::types::HidInterchange::claim()
+
+2. instantiate CtapHid, passing in Usbd, requestor and timestamp
+
+	usbd_ctaphid::CtapHid::new()
+
+3. create CTAPHID-based Trussed apps, passing in Trussed service and empty tuple
+
+	FidoApp::with()
+
+4. in the USB IRQ handler:
+   1. call poll() on all registered classes (e.g. CTAP HID)
+   2. schedule sending keepalive ("wait extension") message
+
+5. in the idle task:
+   1. check the dispatcher
