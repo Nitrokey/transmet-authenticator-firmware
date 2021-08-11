@@ -159,7 +159,7 @@ const APP: () = {
 		let fido_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
 		let mut fido_lfs2_path = littlefs2::path::PathBuf::new();
 		fido_lfs2_path.push(littlefs2::path::Path::from_bytes_with_nul(b"fido\0").unwrap());
-		srv.add_endpoint(fido_trussed_xch.1, fido_lfs2_path);
+		srv.add_endpoint(fido_trussed_xch.1, fido_lfs2_path).ok();
 		let fido_trussed_client = trussed::ClientImplementation::<NRFSyscall>::new(fido_trussed_xch.0, NRFSyscall {});
 		let fido_auth = fido_authenticator::Authenticator::new(fido_trussed_client, fido_authenticator::NonSilentAuthenticator {});
 		let fido_app = dispatch_fido::Fido::<fido_authenticator::NonSilentAuthenticator, trussed::ClientImplementation<NRFSyscall>>::new(fido_auth);
@@ -196,7 +196,7 @@ const APP: () = {
 	}
 
 	#[idle()]
-	fn idle(ctx: idle::Context) -> ! {
+	fn idle(_ctx: idle::Context) -> ! {
 		/*
 		   Note: ARM SysTick stops in WFI. This is unfortunate as
 		   - RTIC uses SysTick for its schedule() feature
@@ -228,6 +228,7 @@ const APP: () = {
 
 	#[task(binds = SWI0_EGU0, resources = [trussed_service])]
 	fn irq_trussed(ctx: irq_trussed::Context) {
+		ctx.resources.trussed_service.process();
 	}
 
 	#[task(binds = GPIOTE, resources = [uart, power, gpiote, ui])]

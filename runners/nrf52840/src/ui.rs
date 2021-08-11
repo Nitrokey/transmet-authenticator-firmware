@@ -259,8 +259,7 @@ impl<'a> USBController<'a> {
 
 	/* Polls for activity from the userspace applications (called during IDLE) */
 	pub fn poll_apps(&mut self, apps: &mut [&mut dyn ctaphid_dispatch::app::App]) -> bool {
-		self.ctaphid_dispatch.as_mut().unwrap().poll(apps);
-		true
+		self.ctaphid_dispatch.as_mut().unwrap().poll(apps)
 	}
 }
 
