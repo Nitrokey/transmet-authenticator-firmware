@@ -36,7 +36,7 @@ mod usb;
 static TRUSSED_LOGO_RLE: &[u8; 4582] = include_bytes!("../trussed_logo.img.rle");
 
 /* Temporary Hack #2: a Trussed Store that exists solely in RAM (no persistence!) */
-littlefs2::const_ram_storage!(InternalStore, 1024);
+littlefs2::const_ram_storage!(InternalStore, 16384);
 littlefs2::const_ram_storage!(ExternalStore, 1024);
 littlefs2::const_ram_storage!(VolatileStore, 1024);
 trussed::store!(
@@ -69,7 +69,11 @@ const APP: () = {
 		ui: ui::StickUI,
 		trussed_service: trussed::service::Service<StickPlatform>,
 		uart: Uarte<nrf52840_hal::pac::UARTE0>,
-		usbctl_proxy: usb::USBControllerProxy,
+		pre_usb: Option<usb::USBPreinitObjects>,
+		#[init(None)]
+		usb: Option<usb::USBObjects<'static>>,
+		#[init(None)]
+		usb_dispatcher: Option<usb::USBDispatcher>,
 		power: nrf52840_hal::pac::POWER,
 		rtc: Rtc<nrf52840_hal::pac::RTC0>,
 		fido_app: dispatch_fido::Fido<fido_authenticator::NonSilentAuthenticator, trussed::ClientImplementation<NRFSyscall>>,
@@ -140,6 +144,9 @@ const APP: () = {
 			VolatileStore::new(),
 		);
 
+		let foopath = littlefs2::path::PathBuf::from("testme/dat/rng-state.bin");
+		trussed::store::store(stickstore, trussed::types::Location::Internal, &foopath, &[0u8; 32]).ok();
+
 		let stickplat = StickPlatform::new(
 			chacha20::ChaCha8Rng::from_rng(rng).unwrap(),
 			stickstore,
@@ -151,8 +158,7 @@ const APP: () = {
 		rtt_target::rprintln!("Apps");
 
 		let fido_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
-		let mut fido_lfs2_path = littlefs2::path::PathBuf::new();
-		fido_lfs2_path.push(littlefs2::path::Path::from_bytes_with_nul(b"fido\0").unwrap());
+		let fido_lfs2_path = littlefs2::path::PathBuf::from("fido");
 		srv.add_endpoint(fido_trussed_xch.1, fido_lfs2_path).ok();
 		let fido_trussed_client = trussed::ClientImplementation::<NRFSyscall>::new(fido_trussed_xch.0, NRFSyscall {});
 		let fido_auth = fido_authenticator::Authenticator::new(fido_trussed_client, fido_authenticator::NonSilentAuthenticator {});
@@ -160,7 +166,9 @@ const APP: () = {
 
 		rtt_target::rprintln!("USB");
 
-		let usbctl_proxy = usb::USBControllerProxy::new(Clocks::new(ctx.device.CLOCK).start_lfclk());
+		let clocks = Clocks::new(ctx.device.CLOCK).start_lfclk().enable_ext_hfosc();
+
+		let usb_preinit = usb::preinit(ctx.device.USBD, clocks);
 
 		rtt_target::rprintln!("Finalizing");
 
@@ -168,7 +176,7 @@ const APP: () = {
 		rtc.enable_interrupt(RtcInterrupt::Tick, None);
 		rtc.enable_counter();
 
-		ctx.spawn.frontend().ok();
+		// ctx.spawn.frontend().ok();
 
 		gpiote.port().enable_interrupt();
 		power.intenset.write(|w| w.pofwarn().set_bit().usbdetected().set_bit().usbremoved().set_bit().usbpwrrdy().set_bit());
@@ -178,11 +186,7 @@ const APP: () = {
 			ui,
 			trussed_service: srv,
 			uart,
-			// clock: clock2,
-			// usbd: usb_dev,
-			// hidclass: hid_desc,
-			// usbctl,
-			usbctl_proxy,
+			pre_usb: Some(usb_preinit),
 			power,
 			rtc,
 			fido_app
@@ -191,7 +195,6 @@ const APP: () = {
 
 	#[idle()]
 	fn idle(_ctx: idle::Context) -> ! {
-		rtt_target::rprintln!("idle");
 		/*
 		   Note: ARM SysTick stops in WFI. This is unfortunate as
 		   - RTIC uses SysTick for its schedule() feature
@@ -199,99 +202,110 @@ const APP: () = {
 		   In the future, we might even consider entering "System OFF".
 		   In short, don't expect schedule() to work.
 		*/
+		rtt_target::rprintln!("idle");
 		loop { cortex_m::asm::wfi(); }
 		// loop {}
 	}
 
-	#[task(priority = 1, resources = [rtc, ui, usbctl_proxy, fido_app])] /* SWI5_EGU5 */
+	#[task(priority = 1, resources = [rtc, ui, usb_dispatcher, fido_app])] /* SWI5_EGU5 */
 	fn frontend(ctx: frontend::Context) {
-		let fido_app = ctx.resources.fido_app;
-		let mut rp_usb_proxy: resources::usbctl_proxy = ctx.resources.usbctl_proxy;
-		let mut rp_rtc: resources::rtc = ctx.resources.rtc;
+		let frontend::Resources { mut rtc, ui, usb_dispatcher, fido_app } = ctx.resources;
 
-		rtt_target::rprintln!("FR2");
-		rp_usb_proxy.lock(|usb_proxy: &mut usb::USBControllerProxy| {
-			let usbctl = usb_proxy.access();
-
-			if let usb::USBControllerEnum::Real(r) = usbctl {
-				if r.poll_apps(&mut [fido_app]) {
-					rtt_target::rprintln!("rUSB");
-					rtic::pend(nrf52840_hal::pac::Interrupt::USBD);
-				}
+		rtt_target::rprintln!("irq SW5");
+		//usb_dispatcher.lock(|usb_dispatcher| {
+		if usb_dispatcher.is_some() {
+			let b = usb_dispatcher.as_mut().unwrap().poll_apps(&mut [fido_app]);
+			if b {
+				rtt_target::rprintln!("rUSB");
+				rtic::pend(nrf52840_hal::pac::Interrupt::USBD);
 			}
-		});
+		}
+		//});
 
 		/*
 		   This is the function where we perform least-urgency stuff, like rendering
 		   display contents.
 		*/
 		let mut rtc_time: u32 = 0;
-		rp_rtc.lock(|rtc| rtc_time = rtc.get_counter() );
-		ctx.resources.ui.refresh(rtc_time);
+		rtc.lock(|rtc| rtc_time = rtc.get_counter() );
+		ui.refresh(rtc_time);
+	}
+
+	#[task(priority = 1, resources = [pre_usb, usb, usb_dispatcher])]
+	fn late_setup_usb(ctx: late_setup_usb::Context) {
+		let late_setup_usb::Resources { pre_usb, mut usb, usb_dispatcher } = ctx.resources;
+
+		rtt_target::rprintln!("create USB");
+		usb.lock(|usb| {
+			let usb_preinit = pre_usb.take().unwrap();
+			let ( usb_init, usb_dsp ) = usb::init(usb_preinit);
+			usb.replace(usb_init);
+			usb_dispatcher.replace(usb_dsp);
+		});
 	}
 
 	#[task(priority = 2, binds = SWI0_EGU0, resources = [trussed_service])]
 	fn irq_trussed(ctx: irq_trussed::Context) {
-		rtt_target::rprintln!(">YS");
+		rtt_target::rprintln!("irq SYS");
 		ctx.resources.trussed_service.process();
 	}
 
 	#[task(priority = 3, binds = GPIOTE, resources = [power, gpiote])]
 	fn irq_gpiote(ctx: irq_gpiote::Context) {
-		rtt_target::rprintln!("RTIC GPIO IRQ");
+		rtt_target::rprintln!("irq GPIO");
 		// ctx.resources.ui.check_buttons();
 		ctx.resources.gpiote.reset_events();
 	}
 
-	#[task(priority = 3, binds = USBD, resources = [usbctl_proxy])]
+	#[task(priority = 3, binds = USBD, resources = [usb])]
 	fn usb_handler(ctx: usb_handler::Context) {
 		let e0 = Instant::now();
-		let usbctl = ctx.resources.usbctl_proxy.access();
+		let ev0 = usb::usbd_debug_events();
 
-		if let usb::USBControllerEnum::Real(r) = usbctl {
-			// let v0 = usb::usbd_debug_events();
-			r.poll();
-			// let v1 = usb::usbd_debug_events();
-		} else {
-			rtt_target::rprintln!("-USB");
-		}
-		if cortex_m::peripheral::NVIC::is_pending(nrf52840_pac::Interrupt::USBD) {
-			usb::usbd_debug_events();
-		}
+		ctx.resources.usb.as_mut().unwrap().poll();
+
+		let ev1 = usb::usbd_debug_events();
 		let e1 = Instant::now();
 		let ed = (e1 - e0).as_cycles();
 		if ed > 64_000 {
-			rtt_target::rprintln!("USBD IRQ {:x} ms", ed);
+			rtt_target::rprintln!("!! long top half: {:x} ms", ed);
+		}
+		if ev1 & 0x00e0_0401 != 0 {
+			rtt_target::rprintln!("USB screams, {:x} -> {:x}", ev0, ev1);
+		} else {
+			rtt_target::rprintln!("irq USB {:x}", usb::usbd_debug_events());
 		}
 	}
 
 	#[task(priority = 4, binds = RTC0, resources = [rtc], spawn = [frontend])]
 	fn rtc_handler(ctx: rtc_handler::Context) {
 		let rtc_count = ctx.resources.rtc.get_counter();
-		rtt_target::rprintln!("RTC {:x}", rtc_count);
+		rtt_target::rprintln!("irq RTC {:x}", rtc_count);
 		ctx.resources.rtc.reset_event(RtcInterrupt::Tick);
 		ctx.spawn.frontend().ok();
 	}
 
-	#[task(priority = 3, binds = POWER_CLOCK, resources = [power, usbctl_proxy])]
+	#[task(priority = 3, binds = POWER_CLOCK, resources = [power], spawn = [late_setup_usb])]
 	fn power_handler(ctx: power_handler::Context) {
-		let pwrM = ctx.resources.power.mainregstatus.read().bits();
-		let pwrU = ctx.resources.power.usbregstatus.read().bits();
-		let pof = ctx.resources.power.pofcon.read().bits();
-		rtt_target::rprintln!("POWER {:x} {:x} {:x}", pwrM, pwrU, pof);
+		let power = &ctx.resources.power;
+		let pwrM = power.mainregstatus.read().bits();
+		let pwrU = power.usbregstatus.read().bits();
+		let pof = power.pofcon.read().bits();
+		rtt_target::rprintln!("irq PWR {:x} {:x} {:x}", pwrM, pwrU, pof);
 
-		if ctx.resources.power.events_usbdetected.read().events_usbdetected().bits() {
-			ctx.resources.usbctl_proxy.instantiate();
-			ctx.resources.power.events_usbdetected.write(|w| unsafe { w.bits(0) });
+		if power.events_usbdetected.read().events_usbdetected().bits() {
+			ctx.spawn.late_setup_usb().ok();
+			// instantiate();
+			power.events_usbdetected.write(|w| unsafe { w.bits(0) });
 		}
 
-		if ctx.resources.power.events_usbpwrrdy.read().events_usbpwrrdy().bits() {
-			ctx.resources.power.events_usbpwrrdy.write(|w| unsafe { w.bits(0) });
+		if power.events_usbpwrrdy.read().events_usbpwrrdy().bits() {
+			power.events_usbpwrrdy.write(|w| unsafe { w.bits(0) });
 		}
 
-		if ctx.resources.power.events_usbremoved.read().events_usbremoved().bits() {
-			ctx.resources.usbctl_proxy.deinstantiate();
-			ctx.resources.power.events_usbremoved.write(|w| unsafe { w.bits(0) });
+		if power.events_usbremoved.read().events_usbremoved().bits() {
+			// deinstantiate();
+			power.events_usbremoved.write(|w| unsafe { w.bits(0) });
 		}
 	}
 

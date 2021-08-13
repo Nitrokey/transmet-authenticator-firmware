@@ -11,68 +11,77 @@ use usb_device::{
 };
 
 type XUsbd<'a> = Usbd<UsbPeripheral<'a>>;
-type LFClockType = Clocks<Internal, Internal, LfOscStarted>;
+// type LFClockType = Clocks<Internal, Internal, LfOscStarted>;
 type LFHFClockType = Clocks<ExternalOscillator, Internal, LfOscStarted>;
 
-static mut LFCLOCK: Option<LFClockType> = None;
-static mut LFHFCLOCK: Option<LFHFClockType> = None;
-
-pub enum USBControllerEnum {
-	Fake,
-	Real(USBController<'static>)
+pub struct USBPreinitObjects {
+	usb_pac: nrf52840_pac::USBD,
+	clk: LFHFClockType
 }
 
-pub struct USBController<'a> {
-	usbd: UsbBusAllocator<XUsbd<'a>>,
-	usbdevice: Option<UsbDevice<'a, XUsbd<'a>>>,
-	ctaphid_class: Option<usbd_ctaphid::CtapHid<'a, XUsbd<'a>>>,
-	ctaphid_dispatch: Option<ctaphid_dispatch::dispatch::Dispatch>
+static mut USBD: Option<UsbBusAllocator<XUsbd>> = None;
+static mut USBCLK: Option<LFHFClockType> = None;
+
+pub struct USBObjects<'a> {
+	usbdevice: UsbDevice<'a, XUsbd<'a>>,
+	ctaphid_class: usbd_ctaphid::CtapHid<'a, XUsbd<'a>>,
 }
 
-impl<'a> USBController<'a> {
-	pub fn new() -> Self { unsafe {
-		LFHFCLOCK = Some(LFCLOCK.take().unwrap().enable_ext_hfosc());
-		let usb_pac = nrf52840_hal::pac::Peripherals::steal().USBD;
-		usb_pac.intenset.write(|w| w.usbreset().set_bit().usbevent().set_bit().sof().set_bit().ep0datadone().set_bit().ep0setup().set_bit());
-		let usb_peripheral = UsbPeripheral::new(usb_pac, LFHFCLOCK.as_ref().unwrap());
-		rtt_target::rprintln!("USBper");
-		Self {
-			usbd: Usbd::new(usb_peripheral),
-			usbdevice: None,
-			ctaphid_class: None,
-			ctaphid_dispatch: None
-		}
-	}}
+pub struct USBDispatcher {
+	ctaphid_dispatch: ctaphid_dispatch::dispatch::Dispatch,
+}
 
-	pub fn activate(&'a mut self) {
-		let (ctaphid_rq, ctaphid_rp) = ctaphid_dispatch::types::HidInterchange::claim().unwrap();
-		let ctaphid = usbd_ctaphid::CtapHid::new(&self.usbd, ctaphid_rq, 0u32)
-				.implements_ctap1()
-				.implements_ctap2()
-				.implements_wink();
-		self.ctaphid_class = Some(ctaphid);
-		self.ctaphid_dispatch = Some(ctaphid_dispatch::dispatch::Dispatch::new(ctaphid_rp));
-		self.usbdevice = Some(
-				UsbDeviceBuilder::new(&self.usbd, UsbVidPid(0x1209, 0x5090))
-				.product("EMC Stick").manufacturer("Nitrokey/PTB")
-				.serial_number("imagine-a-uuid-here")
-				.device_release(0x0001u16)
-				.max_packet_size_0(64).build());
-		rtt_target::rprintln!("USBdev");
-	}
+pub fn preinit(usb_pac: nrf52840_pac::USBD, clk: nrf52840_hal::clocks::Clocks<ExternalOscillator, Internal, LfOscStarted>) -> USBPreinitObjects {
+	USBPreinitObjects { usb_pac, clk }
+}
 
-	/* Polls for activity from the host (called from the USB IRQ handler) */
+pub fn init(preinit: USBPreinitObjects) -> (USBObjects<'static>, USBDispatcher) {
+	preinit.usb_pac.intenset.write(|w| w
+			.usbreset().set_bit()
+			.usbevent().set_bit()
+			.sof().set_bit()
+			.ep0datadone().set_bit()
+			.ep0setup().set_bit());
+
+	unsafe { USBCLK.replace(preinit.clk); }
+	let usbclk_ref = unsafe { USBCLK.as_ref().unwrap() };
+
+	let usb_peripheral = UsbPeripheral::new(preinit.usb_pac, usbclk_ref);
+	unsafe { USBD.replace(Usbd::new(usb_peripheral)); }
+	let usbd_ref = unsafe { USBD.as_ref().unwrap() };
+
+	rtt_target::rprintln!("USB: Glbl ok");
+
+	let (ctaphid_rq, ctaphid_rp) = ctaphid_dispatch::types::HidInterchange::claim().unwrap();
+	let ctaphid = usbd_ctaphid::CtapHid::new(usbd_ref, ctaphid_rq, 0u32)
+			.implements_ctap1()
+			.implements_ctap2()
+			.implements_wink();
+	let ctaphid_dispatch = ctaphid_dispatch::dispatch::Dispatch::new(ctaphid_rp);
+	let usbdevice = UsbDeviceBuilder::new(usbd_ref, UsbVidPid(0x1209, 0x5090))
+			.product("EMC Stick").manufacturer("Nitrokey/PTB")
+			.serial_number("imagine-a-uuid-here")
+			.device_release(0x0001u16)
+			.max_packet_size_0(64).build();
+
+	rtt_target::rprintln!("USB: Objx ok");
+
+	( USBObjects { usbdevice, ctaphid_class: ctaphid },
+		USBDispatcher { ctaphid_dispatch } )
+}
+
+impl USBObjects<'static> {
+	// Polls for activity from the host (called from the USB IRQ handler) //
 	pub fn poll(&mut self) {
-		let usbdev: &mut UsbDevice<XUsbd> = self.usbdevice.as_mut().unwrap();
-		let ctaphid: &mut usbd_ctaphid::CtapHid<XUsbd> = self.ctaphid_class.as_mut().unwrap();
-
-		ctaphid.check_for_app_response();
-		usbdev.poll(&mut [ctaphid]);
+		self.ctaphid_class.check_for_app_response();
+		self.usbdevice.poll(&mut [&mut self.ctaphid_class]);
 	}
+}
 
-	/* Polls for activity from the userspace applications (called during IDLE) */
+impl USBDispatcher {
+	// Polls for activity from the userspace applications (called during IDLE) //
 	pub fn poll_apps(&mut self, apps: &mut [&mut dyn ctaphid_dispatch::app::App]) -> bool {
-		self.ctaphid_dispatch.as_mut().unwrap().poll(apps)
+		self.ctaphid_dispatch.poll(apps)
 	}
 }
 
@@ -104,33 +113,4 @@ pub fn usbd_debug_events() -> u32 {
 		v |= bit_event!(usb_pac.events_usbreset, 0);
 	}
 	v
-}
-
-static mut USBCTL: USBControllerEnum = USBControllerEnum::Fake;
-
-/* ZST so we can carry it around as a resource in RTIC */
-pub struct USBControllerProxy { }
-impl USBControllerProxy {
-	pub fn new(clk: LFClockType) -> Self {
-		unsafe { LFCLOCK = Some(clk); }
-		Self {}
-	}
-
-	pub fn access(&self) -> &'static mut USBControllerEnum { unsafe { &mut USBCTL } }
-
-	pub fn instantiate(&self) {
-		let usbctlenum = self.access();
-		match usbctlenum {
-		USBControllerEnum::Real(_) => { },
-		USBControllerEnum::Fake => {
-			rtt_target::rprintln!("USBf>r");
-			unsafe { USBCTL = USBControllerEnum::Real(USBController::new());
-			if let USBControllerEnum::Real(r2) = &mut USBCTL {
-				r2.activate();
-			}}
-		}}
-	}
-
-	pub fn deinstantiate(&self) {
-	}
 }
