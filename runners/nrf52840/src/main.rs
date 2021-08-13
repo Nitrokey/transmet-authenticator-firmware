@@ -15,26 +15,23 @@ use nrf52840_hal::{
 	uarte::{Baudrate, Parity, Uarte},
 };
 use rand_core::SeedableRng;
+use rtic::cyccnt::Instant;
 use trussed::{
 	Interchange,
 	types::{LfsResult, LfsStorage},
 };
 
-#[cfg(feature = "board-nrfdk")]
-use crate::board_nrfdk as board;
-#[cfg(feature = "board-proto1")]
-use crate::board_proto1 as board;
-
 #[cfg(not(any(feature = "board-nrfdk", feature = "board-proto1")))]
 compile_error!{"No board target chosen! Set your board using --feature; see Cargo.toml."}
 
-#[cfg(feature = "board-nrfdk")]
-mod board_nrfdk;
-#[cfg(feature = "board-proto1")]
-mod board_proto1;
+#[cfg_attr(feature = "board-nrfdk", path = "board_nrfdk.rs")]
+#[cfg_attr(feature = "board-proto1", path = "board_proto1.rs")]
+mod board;
+
 mod rle;
 mod types;
 mod ui;
+mod usb;
 
 static TRUSSED_LOGO_RLE: &[u8; 4582] = include_bytes!("../trussed_logo.img.rle");
 
@@ -60,6 +57,7 @@ trussed::platform!(
 pub struct NRFSyscall {}
 impl trussed::platform::Syscall for NRFSyscall {
 	fn syscall(&mut self) {
+		rtt_target::rprintln!("SYS");
 		rtic::pend(nrf52840_hal::pac::Interrupt::SWI0_EGU0);
 	}
 }
@@ -71,11 +69,7 @@ const APP: () = {
 		ui: ui::StickUI,
 		trussed_service: trussed::service::Service<StickPlatform>,
 		uart: Uarte<nrf52840_hal::pac::UARTE0>,
-		usbctl_proxy: ui::USBControllerProxy,
-		// usbctl: ui::USBControllerEnum,
-		// clock: Clocks<ExternalOscillator, nrf52840_hal::clocks::Internal, LfOscStarted>,
-		// usbd: UsbDevice<'static, Usbd<UsbPeripheral<'static>>>,
-		// hidclass: HIDClass<'static, Usbd<UsbPeripheral<'static>>>,
+		usbctl_proxy: usb::USBControllerProxy,
 		power: nrf52840_hal::pac::POWER,
 		rtc: Rtc<nrf52840_hal::pac::RTC0>,
 		fido_app: dispatch_fido::Fido<fido_authenticator::NonSilentAuthenticator, trussed::ClientImplementation<NRFSyscall>>,
@@ -166,7 +160,7 @@ const APP: () = {
 
 		rtt_target::rprintln!("USB");
 
-		let usbctl_proxy = ui::USBControllerProxy::new(Clocks::new(ctx.device.CLOCK).start_lfclk());
+		let usbctl_proxy = usb::USBControllerProxy::new(Clocks::new(ctx.device.CLOCK).start_lfclk());
 
 		rtt_target::rprintln!("Finalizing");
 
@@ -197,6 +191,7 @@ const APP: () = {
 
 	#[idle()]
 	fn idle(_ctx: idle::Context) -> ! {
+		rtt_target::rprintln!("idle");
 		/*
 		   Note: ARM SysTick stops in WFI. This is unfortunate as
 		   - RTIC uses SysTick for its schedule() feature
@@ -208,66 +203,82 @@ const APP: () = {
 		// loop {}
 	}
 
-	#[task(resources = [rtc, ui, usbctl_proxy, fido_app])]
+	#[task(priority = 1, resources = [rtc, ui, usbctl_proxy, fido_app])] /* SWI5_EGU5 */
 	fn frontend(ctx: frontend::Context) {
-		let usbctl = ctx.resources.usbctl_proxy.access();
+		let fido_app = ctx.resources.fido_app;
+		let mut rp_usb_proxy: resources::usbctl_proxy = ctx.resources.usbctl_proxy;
+		let mut rp_rtc: resources::rtc = ctx.resources.rtc;
 
-		if let ui::USBControllerEnum::Real(r) = usbctl {
-			if r.poll_apps(&mut [ctx.resources.fido_app]) {
-				rtic::pend(nrf52840_hal::pac::Interrupt::USBD);
+		rtt_target::rprintln!("FR2");
+		rp_usb_proxy.lock(|usb_proxy: &mut usb::USBControllerProxy| {
+			let usbctl = usb_proxy.access();
+
+			if let usb::USBControllerEnum::Real(r) = usbctl {
+				if r.poll_apps(&mut [fido_app]) {
+					rtt_target::rprintln!("rUSB");
+					rtic::pend(nrf52840_hal::pac::Interrupt::USBD);
+				}
 			}
-		}
+		});
 
 		/*
 		   This is the function where we perform least-urgency stuff, like rendering
 		   display contents.
 		*/
-		let rtc_time = ctx.resources.rtc.get_counter();
+		let mut rtc_time: u32 = 0;
+		rp_rtc.lock(|rtc| rtc_time = rtc.get_counter() );
 		ctx.resources.ui.refresh(rtc_time);
 	}
 
-	#[task(binds = SWI0_EGU0, resources = [trussed_service])]
+	#[task(priority = 2, binds = SWI0_EGU0, resources = [trussed_service])]
 	fn irq_trussed(ctx: irq_trussed::Context) {
+		rtt_target::rprintln!(">YS");
 		ctx.resources.trussed_service.process();
 	}
 
-	#[task(binds = GPIOTE, resources = [uart, power, gpiote, ui])]
+	#[task(priority = 3, binds = GPIOTE, resources = [power, gpiote])]
 	fn irq_gpiote(ctx: irq_gpiote::Context) {
 		rtt_target::rprintln!("RTIC GPIO IRQ");
-		ctx.resources.ui.check_buttons();
+		// ctx.resources.ui.check_buttons();
 		ctx.resources.gpiote.reset_events();
 	}
 
-	#[task(binds = USBD, resources = [usbctl_proxy])]
+	#[task(priority = 3, binds = USBD, resources = [usbctl_proxy])]
 	fn usb_handler(ctx: usb_handler::Context) {
-		rtt_target::rprintln!("USB");
-
+		let e0 = Instant::now();
 		let usbctl = ctx.resources.usbctl_proxy.access();
 
-		if let ui::USBControllerEnum::Real(r) = usbctl {
+		if let usb::USBControllerEnum::Real(r) = usbctl {
+			// let v0 = usb::usbd_debug_events();
 			r.poll();
+			// let v1 = usb::usbd_debug_events();
+		} else {
+			rtt_target::rprintln!("-USB");
+		}
+		if cortex_m::peripheral::NVIC::is_pending(nrf52840_pac::Interrupt::USBD) {
+			usb::usbd_debug_events();
+		}
+		let e1 = Instant::now();
+		let ed = (e1 - e0).as_cycles();
+		if ed > 64_000 {
+			rtt_target::rprintln!("USBD IRQ {:x} ms", ed);
 		}
 	}
 
-	#[task(binds = RTC0, resources = [uart, rtc], spawn = [frontend])]
+	#[task(priority = 4, binds = RTC0, resources = [rtc], spawn = [frontend])]
 	fn rtc_handler(ctx: rtc_handler::Context) {
 		let rtc_count = ctx.resources.rtc.get_counter();
-		rtt_target::rprintln!("RTC");
-		uart_emit(ctx.resources.uart, b"RTCctr ", Some(rtc_count));
+		rtt_target::rprintln!("RTC {:x}", rtc_count);
 		ctx.resources.rtc.reset_event(RtcInterrupt::Tick);
 		ctx.spawn.frontend().ok();
 	}
 
-	#[task(binds = POWER_CLOCK, resources = [power, uart, usbctl_proxy])]
+	#[task(priority = 3, binds = POWER_CLOCK, resources = [power, usbctl_proxy])]
 	fn power_handler(ctx: power_handler::Context) {
-		let mut pwr: u32;
-		rtt_target::rprintln!("POWER");
-		pwr = ctx.resources.power.mainregstatus.read().bits();
-		uart_emit(ctx.resources.uart, b"PWRm ", Some(pwr));
-		pwr = ctx.resources.power.usbregstatus.read().bits();
-		uart_emit(ctx.resources.uart, b"PWRu ", Some(pwr));
-		pwr = ctx.resources.power.pofcon.read().bits();
-		uart_emit(ctx.resources.uart, b"POF  ", Some(pwr));
+		let pwrM = ctx.resources.power.mainregstatus.read().bits();
+		let pwrU = ctx.resources.power.usbregstatus.read().bits();
+		let pof = ctx.resources.power.pofcon.read().bits();
+		rtt_target::rprintln!("POWER {:x} {:x} {:x}", pwrM, pwrU, pof);
 
 		if ctx.resources.power.events_usbdetected.read().events_usbdetected().bits() {
 			ctx.resources.usbctl_proxy.instantiate();
@@ -308,7 +319,7 @@ pub fn u32_to_hex08(v: u32, buf: &mut [u8; 8], pad: bool) -> &[u8] {
 	return &buf[..];
 }
 
-pub fn uart_emit(uart: &mut Uarte<nrf52840_hal::pac::UARTE0>, buf: &[u8], val: Option<u32>) {
+pub fn uart_debug(uart: &mut Uarte<nrf52840_hal::pac::UARTE0>, buf: &[u8], val: Option<u32>) {
 	let mut res: Result<_, _>;
 	let mut mutbuf = [0u8; 8];
 	let mut i: usize = 0;

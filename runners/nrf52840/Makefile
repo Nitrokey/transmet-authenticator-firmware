@@ -4,6 +4,8 @@ OUTDIR2 := target/thumbv7em-none-eabihf
 
 build: build-proto1-debug build-proto1-release build-nrfdk-debug build-nrfdk-release
 
+release: build-nrfdk-release build-proto1-release
+
 define build-template
 build-$(1)-$(2):
 	@echo "[31;1mBuilding board [$(1)] flavor [$(2)]...[37;0m"
