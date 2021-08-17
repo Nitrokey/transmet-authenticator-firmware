@@ -24,10 +24,10 @@ enum StickUIState {
 	
 }
 
-static mut DISPLAY_BUF: [u8; 64800] = [0; 64800];
+static mut DISPLAY_BUF: [u8; 64] = [0; 64];
 
 pub struct StickUI {
-	buf: &'static mut [u8; 64800],
+	buf: &'static mut [u8; 64],
 	dsp: Display,
 	buttons: [Option<InPin>; 8],
 	leds: [Option<OutPin>; 4],
@@ -51,22 +51,14 @@ impl StickUI {
 		let c: u16 = Into::<RawU16>::into(color).into_inner();
 		let ch: u8 = (c >> 8) as u8;
 		let cl: u8 = (c & 255) as u8;
-		let mut i: usize = 0;
 		let buflen: usize = buf.len();
 
-		// the code generated from this is super-crappy and contains lots of
-		// panic_bounds_check() even though it should be trivial to prove
-		// that no violation can take place
+		// the code generated from this looks more complicated than necessary;
 		// one day, replace all this nonsense with a tasty call to __aeabi_memset4()
 		// or figure out the "proper" Rust incantation the compiler happens to grasp
-		// PS: somebody know a way to iterate over every _other_ element without
-		// happy iterator complexity from the 'std' crate? I don't.
-		while i+3 < buflen {
+		for i in (0..buflen).step_by(2) {
 			buf[i+0] = ch;
 			buf[i+1] = cl;
-			buf[i+2] = ch;
-			buf[i+3] = cl;
-			i += 4;
 		}
 	}
 
@@ -75,11 +67,11 @@ impl StickUI {
 		StickUIState::PreInitGarbled => {
 			let logo_decode = rle::rle_decode(self.buf, TRUSSED_LOGO_RLE);
 			if logo_decode.is_ok() {
-				self.dsp.blit(self.buf);
+				// self.dsp.blit(self.buf);
 				self.state = StickUIState::Logo;
 			} else {
 				StickUI::rgb16_memset(self.buf, embedded_graphics::pixelcolor::Rgb565::BLACK);
-				self.dsp.blit(self.buf);
+				// self.dsp.blit(self.buf);
 				self.state = StickUIState::Blank;
 			}
 			self.last_update = t;
@@ -87,7 +79,7 @@ impl StickUI {
 		StickUIState::Logo => {
 				if self.last_update + 32 < t {
 					StickUI::rgb16_memset(self.buf, embedded_graphics::pixelcolor::Rgb565::BLACK);
-					self.dsp.blit(self.buf);
+					// self.dsp.blit(self.buf);
 					self.state = StickUIState::Blank;
 					self.last_update = t;
 				}
@@ -113,7 +105,7 @@ impl WrappedUI {
 
 impl trussed::platform::UserInterface for WrappedUI {
 	fn check_user_presence(&mut self) -> consent::Level {
-		consent::Level::None
+		consent::Level::Normal
 	}
 
 	fn set_status(&mut self, _status: ui::Status) {

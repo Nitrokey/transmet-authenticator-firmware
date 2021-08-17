@@ -7,7 +7,8 @@ license = "ISC"
 resolver = "2"
 
 [dependencies]
-nrf52840-hal = { git = "https://github.com/Nitrokey/nrf-hal/", rev = "228ccb0" }
+# nrf52840-hal = { git = "https://github.com/Nitrokey/nrf-hal/", rev = "228ccb0" }
+nrf52840-hal = { path = "../../../nrf-hal/nrf52840-hal" }
 nrf52840-pac = "*"
 picolcd114 = { git = "https://github.com/Nitrokey/picolcd114/" }
 cortex-m = "0.6"
@@ -24,6 +25,7 @@ usb-device = "0.2"
 usbd-hid = "0.4"
 # usbd-serial = "0.1"
 embedded-graphics = "0.6"
+embedded-storage = "0.1"
 display-interface-spi = "*"
 generic-array = "0.14"
 rand_core = "0.6"

@@ -28,6 +28,7 @@ compile_error!{"No board target chosen! Set your board using --feature; see Carg
 #[cfg_attr(feature = "board-proto1", path = "board_proto1.rs")]
 mod board;
 
+mod flash;
 mod rle;
 mod types;
 mod ui;
@@ -36,12 +37,12 @@ mod usb;
 static TRUSSED_LOGO_RLE: &[u8; 4582] = include_bytes!("../trussed_logo.img.rle");
 
 /* Temporary Hack #2: a Trussed Store that exists solely in RAM (no persistence!) */
-littlefs2::const_ram_storage!(InternalStore, 16384);
+// littlefs2::const_ram_storage!(InternalStore, 1024);
 littlefs2::const_ram_storage!(ExternalStore, 1024);
 littlefs2::const_ram_storage!(VolatileStore, 1024);
 trussed::store!(
 	StickStore,
-	Internal: InternalStore,
+	Internal: flash::FlashStorage,
 	External: ExternalStore,
 	Volatile: VolatileStore
 );
@@ -136,22 +137,33 @@ const APP: () = {
 		let ui = ui::StickUI::new(disp, board_gpio.buttons, board_gpio.leds);
 
 		/* WIP: put together our hacked up LEGO bricks to create the Trussed service instance */
-		rtt_target::rprintln!("Trussed Components");
 
-		let stickstore = StickStore::attach_else_format(
-			InternalStore::new(),
+		rtt_target::rprintln!("Flash");
+
+		let mut stickflash = flash::FlashStorage::new(ctx.device.NVMC, 0x000F_0000 as *mut u32, 0x1_0000 as usize);
+		stickflash.erase(0, 0x1_0000).ok();
+
+		rtt_target::rprintln!("Trussed Store");
+
+		let stickstore = StickStore::init(
+			stickflash,
 			ExternalStore::new(),
 			VolatileStore::new(),
+			true
 		);
 
-		let foopath = littlefs2::path::PathBuf::from("testme/dat/rng-state.bin");
-		trussed::store::store(stickstore, trussed::types::Location::Internal, &foopath, &[0u8; 32]).ok();
+		// let foopath = littlefs2::path::PathBuf::from("testme/dat/rng-state.bin");
+		// trussed::store::store(stickstore, trussed::types::Location::Internal, &foopath, &[0u8; 32]).ok();
+
+		rtt_target::rprintln!("Trussed Platform");
 
 		let stickplat = StickPlatform::new(
 			chacha20::ChaCha8Rng::from_rng(rng).unwrap(),
 			stickstore,
 			ui::WrappedUI::new()
 		);
+
+		rtt_target::rprintln!("Trussed Service");
 
 		let mut srv = trussed::service::Service::new(stickplat);
 
@@ -214,11 +226,13 @@ const APP: () = {
 		rtt_target::rprintln!("irq SW5");
 		//usb_dispatcher.lock(|usb_dispatcher| {
 		if usb_dispatcher.is_some() {
+			cortex_m::peripheral::NVIC::mask(nrf52840_hal::pac::Interrupt::USBD);
 			let b = usb_dispatcher.as_mut().unwrap().poll_apps(&mut [fido_app]);
 			if b {
 				rtt_target::rprintln!("rUSB");
 				rtic::pend(nrf52840_hal::pac::Interrupt::USBD);
 			}
+			unsafe { cortex_m::peripheral::NVIC::unmask(nrf52840_hal::pac::Interrupt::USBD); }
 		}
 		//});
 
@@ -268,12 +282,12 @@ const APP: () = {
 		let e1 = Instant::now();
 		let ed = (e1 - e0).as_cycles();
 		if ed > 64_000 {
-			rtt_target::rprintln!("!! long top half: {:x} ms", ed);
+			rtt_target::rprintln!("!! long top half: {:x} cyc", ed);
 		}
-		if ev1 & 0x00e0_0401 != 0 {
+		if (ev0 & ev1 & 0x00e0_0401) != 0 {
 			rtt_target::rprintln!("USB screams, {:x} -> {:x}", ev0, ev1);
 		} else {
-			rtt_target::rprintln!("irq USB {:x}", usb::usbd_debug_events());
+			// rtt_target::rprintln!("irq USB {:x}", usb::usbd_debug_events());
 		}
 	}
 
