@@ -63,6 +63,15 @@ impl trussed::platform::Syscall for NRFSyscall {
 	}
 }
 
+pub struct NRFReboot {}
+impl admin_app::Reboot for NRFReboot {
+	fn reboot() -> ! { todo!() }
+	fn reboot_to_firmware_update() -> ! { todo!() }
+	fn reboot_to_firmware_update_destructive() -> ! { todo!() }
+}
+
+type TrussedClient = trussed::ClientImplementation<NRFSyscall>;
+
 #[rtic::app(device = nrf52840_hal::pac, peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
 	struct Resources {
@@ -77,7 +86,8 @@ const APP: () = {
 		usb_dispatcher: Option<usb::USBDispatcher>,
 		power: nrf52840_hal::pac::POWER,
 		rtc: Rtc<nrf52840_hal::pac::RTC0>,
-		fido_app: dispatch_fido::Fido<fido_authenticator::NonSilentAuthenticator, trussed::ClientImplementation<NRFSyscall>>,
+		fido_app: dispatch_fido::Fido<fido_authenticator::NonSilentAuthenticator, TrussedClient>,
+		admin_app: admin_app::App<TrussedClient, NRFReboot>,
 	}
 
 	#[init(spawn = [frontend])]
@@ -172,9 +182,15 @@ const APP: () = {
 		let fido_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
 		let fido_lfs2_path = littlefs2::path::PathBuf::from("fido");
 		srv.add_endpoint(fido_trussed_xch.1, fido_lfs2_path).ok();
-		let fido_trussed_client = trussed::ClientImplementation::<NRFSyscall>::new(fido_trussed_xch.0, NRFSyscall {});
+		let fido_trussed_client = TrussedClient::new(fido_trussed_xch.0, NRFSyscall {});
 		let fido_auth = fido_authenticator::Authenticator::new(fido_trussed_client, fido_authenticator::NonSilentAuthenticator {});
-		let fido_app = dispatch_fido::Fido::<fido_authenticator::NonSilentAuthenticator, trussed::ClientImplementation<NRFSyscall>>::new(fido_auth);
+		let fido_app = dispatch_fido::Fido::<fido_authenticator::NonSilentAuthenticator, TrussedClient>::new(fido_auth);
+
+		let admin_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
+		let admin_lfs2_path = littlefs2::path::PathBuf::from("admin");
+		srv.add_endpoint(admin_trussed_xch.1, admin_lfs2_path).ok();
+		let admin_trussed_client = TrussedClient::new(admin_trussed_xch.0, NRFSyscall {});
+		let admin_app = admin_app::App::<TrussedClient, NRFReboot>::new(admin_trussed_client, [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15], 0x00000001);
 
 		rtt_target::rprintln!("USB");
 
@@ -201,7 +217,8 @@ const APP: () = {
 			pre_usb: Some(usb_preinit),
 			power,
 			rtc,
-			fido_app
+			fido_app,
+			admin_app
 		}
 	}
 
@@ -219,15 +236,15 @@ const APP: () = {
 		// loop {}
 	}
 
-	#[task(priority = 1, resources = [rtc, ui, usb_dispatcher, fido_app])] /* SWI5_EGU5 */
+	#[task(priority = 1, resources = [rtc, ui, usb_dispatcher, fido_app, admin_app])] /* SWI5_EGU5 */
 	fn frontend(ctx: frontend::Context) {
-		let frontend::Resources { mut rtc, ui, usb_dispatcher, fido_app } = ctx.resources;
+		let frontend::Resources { mut rtc, ui, usb_dispatcher, fido_app, admin_app} = ctx.resources;
 
 		rtt_target::rprintln!("irq SW5");
 		//usb_dispatcher.lock(|usb_dispatcher| {
 		if usb_dispatcher.is_some() {
 			cortex_m::peripheral::NVIC::mask(nrf52840_hal::pac::Interrupt::USBD);
-			let b = usb_dispatcher.as_mut().unwrap().poll_apps(&mut [fido_app]);
+			let b = usb_dispatcher.as_mut().unwrap().poll_apps(&mut [fido_app, admin_app]);
 			if b {
 				rtt_target::rprintln!("rUSB");
 				rtic::pend(nrf52840_hal::pac::Interrupt::USBD);
