@@ -1,17 +1,18 @@
 use core::convert::TryInto;
 use embedded_storage::nor_flash::{NorFlash};
 
+pub const FLASH_SIZE: usize = 0x2_0000;
+
 #[repr(align(4096))]
 pub struct FlashStorage {
 	nvmc: nrf52840_hal::nvmc::Nvmc<nrf52840_pac::NVMC>,
-	// buf: &'static mut [u32; 32768/4],
 }
 
 impl littlefs2::driver::Storage for FlashStorage {
 	const BLOCK_SIZE: usize = 4096;
 	const READ_SIZE: usize = 4;
 	const WRITE_SIZE: usize = 4;
-	const BLOCK_COUNT: usize = 65536 / 4096;
+	const BLOCK_COUNT: usize = FLASH_SIZE / Self::BLOCK_SIZE;
 	type CACHE_SIZE = generic_array::typenum::U4096;
 	type LOOKAHEADWORDS_SIZE = generic_array::typenum::U32;
 
@@ -51,7 +52,7 @@ impl FlashStorage {
 		if ((mem as usize | size) & 0xfff) != 0 {
 			panic!("Invalid NVMC base or size.");
 		}
-		if size != 65536 {
+		if size != FLASH_SIZE {
 			panic!("Invalid NVMC size.");
 		}
 		let buf = unsafe { core::slice::from_raw_parts_mut(mem, size).try_into().unwrap() };

@@ -62,6 +62,8 @@ default = ["admin-app", "fido-authenticator", "ndef-app", "oath-authenticator", 
 develop = ["no-encrypted-storage", "no-reset-time-window", "trussed/clients-4"]
 develop-provisioner = ["no-encrypted-storage", "no-reset-time-window", "provisioner-app", "trussed/clients-5"]
 
+reformat-flash = []
+
 # Allow resetting FIDO authenticator (and possibly others) even after 10s uptime
 no-reset-time-window = ["fido-authenticator/disable-reset-time-window"]
 no-encrypted-storage = []

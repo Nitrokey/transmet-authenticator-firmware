@@ -60,6 +60,20 @@ pub fn init_gpio(gpiote: &Gpiote, gpio_p0: p0::Parts, gpio_p1: p1::Parts) -> Boa
 		mosi: Some(dsp_spi_mosi)
 	};
 
+	/* Ext. Flash SPI */
+	// Flash WP# gpio_p0.p0_22
+	// Flash HOLD# gpio_p0.p0_23
+        let flash_spi_cs = gpio_p0.p0_17.into_push_pull_output(Level::High).degrade();
+        let flashnfc_spi_clk = gpio_p0.p0_19.into_push_pull_output(Level::Low).degrade();
+        let flashnfc_spi_mosi = gpio_p0.p0_20.into_push_pull_output(Level::Low).degrade();
+        let flashnfc_spi_miso = gpio_p0.p0_21.into_floating_input().degrade();
+
+	let flashnfc_spi = spim::Pins {
+		sck: flashnfc_spi_clk,
+		miso: Some(flashnfc_spi_miso),
+		mosi: Some(flashnfc_spi_mosi)
+	};
+
 	BoardGPIO { buttons: [
 			Some(btn1), Some(btn2), Some(btn3), Some(btn4),
 			Some(btn5), Some(btn6), Some(btn7), Some(btn8) ],
@@ -76,8 +90,8 @@ pub fn init_gpio(gpiote: &Gpiote, gpio_p0: p0::Parts, gpio_p1: p1::Parts) -> Boa
 		display_dc: Some(dsp_spi_dc),
 		display_backlight: Some(dsp_spi_bl),
 		display_power: None,
-		flashnfc_spi: None,
-		flash_cs: None,
+		flashnfc_spi: Some(flashnfc_spi),
+		flash_cs: Some(flash_spi_cs),
 		flash_power: None,
 		nfc_cs: None,
 		nfc_irq: None,

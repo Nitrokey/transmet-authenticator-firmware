@@ -36,10 +36,9 @@ mod usb;
 
 static TRUSSED_LOGO_RLE: &[u8; 4582] = include_bytes!("../trussed_logo.img.rle");
 
-/* Temporary Hack #2: a Trussed Store that exists solely in RAM (no persistence!) */
-// littlefs2::const_ram_storage!(InternalStore, 1024);
+/* TODO: add external flash */
 littlefs2::const_ram_storage!(ExternalStore, 1024);
-littlefs2::const_ram_storage!(VolatileStore, 1024);
+littlefs2::const_ram_storage!(VolatileStore, 8192);
 trussed::store!(
 	StickStore,
 	Internal: flash::FlashStorage,
@@ -47,7 +46,6 @@ trussed::store!(
 	Volatile: VolatileStore
 );
 
-/* Combining our temporary hacks... */
 trussed::platform!(
 	StickPlatform,
 	R: chacha20::ChaCha8Rng,
@@ -96,6 +94,21 @@ const APP: () = {
 		ctx.core.DWT.enable_cycle_counter();
 
 		rtt_target::rtt_init_print!();
+
+		let ficr = &*ctx.device.FICR;
+		rtt_target::rprintln!("FICR DeviceID {:08x} {:08x}", ficr.deviceid[0].read().bits(), ficr.deviceid[1].read().bits());
+		rtt_target::rprintln!("FICR EncRoot  {:08x} {:08x} {:08x} {:08x}",
+			ficr.er[0].read().bits(), ficr.er[1].read().bits(),
+			ficr.er[2].read().bits(), ficr.er[3].read().bits());
+		rtt_target::rprintln!("FICR IdtRoot  {:08x} {:08x} {:08x} {:08x}",
+			ficr.ir[0].read().bits(), ficr.ir[1].read().bits(),
+			ficr.ir[2].read().bits(), ficr.ir[3].read().bits());
+		let da0 = ficr.deviceaddr[0].read().bits();
+		let da1 = ficr.deviceaddr[1].read().bits();
+		rtt_target::rprintln!("FICR DevAddr  {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} {}",
+			(da1 >> 8) as u8, da1 as u8,
+			(da0 >> 24) as u8, (da0 >> 16) as u8, (da0 >> 8) as u8, da0 as u8,
+			if (ficr.deviceaddrtype.read().bits() & 1) != 0 { "RND" } else { "PUB" });
 
 		board::init_early(&ctx.device, &ctx.core);
 
@@ -150,8 +163,10 @@ const APP: () = {
 
 		rtt_target::rprintln!("Flash");
 
-		let mut stickflash = flash::FlashStorage::new(ctx.device.NVMC, 0x000F_0000 as *mut u32, 0x1_0000 as usize);
-		stickflash.erase(0, 0x1_0000).ok();
+		let mut stickflash = flash::FlashStorage::new(ctx.device.NVMC, 0x000E_0000 as *mut u32, flash::FLASH_SIZE as usize);
+		if cfg!(feature = "reformat-flash") {
+			stickflash.erase(0, flash::FLASH_SIZE).ok();
+		}
 
 		rtt_target::rprintln!("Trussed Store");
 
@@ -159,7 +174,7 @@ const APP: () = {
 			stickflash,
 			ExternalStore::new(),
 			VolatileStore::new(),
-			true
+			cfg!(feature = "reformat-flash")
 		);
 
 		// let foopath = littlefs2::path::PathBuf::from("testme/dat/rng-state.bin");
