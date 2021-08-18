@@ -1,10 +1,12 @@
 OUTDIR2 := target/thumbv7em-none-eabihf
 
-.PHONY: build clean update deny
-
-build: build-proto1-debug build-proto1-release build-nrfdk-debug build-nrfdk-release
+.PHONY: build release debug clean update deny
 
 release: build-nrfdk-release build-proto1-release
+
+debug: build-nrfdk-debug build-proto1-debug
+
+build: build-proto1-debug build-proto1-release build-nrfdk-debug build-nrfdk-release
 
 define build-template
 build-$(1)-$(2):
