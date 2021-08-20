@@ -1,4 +1,4 @@
-use crate::{rle, TRUSSED_LOGO_RLE};
+// use crate::{rle, TRUSSED_LOGO_RLE};
 use embedded_graphics::{
 	DrawTarget,
 	pixelcolor::{RgbColor, Rgb565, raw::RawU16, raw::RawData},
@@ -21,13 +21,14 @@ enum StickUIState {
 	PreInitGarbled,
 	Logo,
 	Blank,
-	
 }
 
-static mut DISPLAY_BUF: [u8; 64] = [0; 64];
+/* sufficient (rgb565) room for a 32x32 sprite or 6 9x18 characters */
+static mut DISPLAY_BUF: [u8; 2048] = [0; 2048];
+const FONT: &[u8; 62208] = include_bytes!("../data/font_9x18.raw");
 
 pub struct StickUI {
-	buf: &'static mut [u8; 64],
+	buf: &'static mut [u8; 2048],
 	dsp: Display,
 	buttons: [Option<InPin>; 8],
 	leds: [Option<OutPin>; 4],
@@ -43,54 +44,80 @@ impl StickUI {
 
 	pub fn check_buttons(&self) {
 		if self.buttons[0].as_ref().map_or_else(|| false, |b| b.is_low().unwrap()) {
+			/* do something */
 		}
 	}
 
-	fn rgb16_memset(buf: &mut [u8], color: Rgb565) {
+	fn rgb16_memset(&mut self, color: Rgb565) {
 		// holy cow, Rust type inference/annotation is so sh*tty...
 		let c: u16 = Into::<RawU16>::into(color).into_inner();
 		let ch: u8 = (c >> 8) as u8;
 		let cl: u8 = (c & 255) as u8;
-		let buflen: usize = buf.len();
+		let buflen: usize = self.buf.len();
 
 		// the code generated from this looks more complicated than necessary;
 		// one day, replace all this nonsense with a tasty call to __aeabi_memset4()
 		// or figure out the "proper" Rust incantation the compiler happens to grasp
 		for i in (0..buflen).step_by(2) {
-			buf[i+0] = ch;
-			buf[i+1] = cl;
+			self.buf[i+0] = ch;
+			self.buf[i+1] = cl;
 		}
 	}
 
 	pub fn refresh(&mut self, t: u32) {
 		match self.state {
 		StickUIState::PreInitGarbled => {
-			let logo_decode = rle::rle_decode(self.buf, TRUSSED_LOGO_RLE);
-			if logo_decode.is_ok() {
-				// self.dsp.blit(self.buf);
-				self.state = StickUIState::Logo;
-			} else {
-				StickUI::rgb16_memset(self.buf, embedded_graphics::pixelcolor::Rgb565::BLACK);
-				// self.dsp.blit(self.buf);
-				self.state = StickUIState::Blank;
-			}
+			rtt_target::rprintln!("UI P");
+			self.rgb16_memset(embedded_graphics::pixelcolor::Rgb565::BLACK);
+			self.tile_bg();
+			self.state = StickUIState::Blank;
 			self.last_update = t;
 			}
 		StickUIState::Logo => {
-				if self.last_update + 32 < t {
-					StickUI::rgb16_memset(self.buf, embedded_graphics::pixelcolor::Rgb565::BLACK);
-					// self.dsp.blit(self.buf);
-					self.state = StickUIState::Blank;
-					self.last_update = t;
-				}
+			rtt_target::rprintln!("UI L");
 			}
 		StickUIState::Blank => {
+			rtt_target::rprintln!("UI B");
+			self.prepare_text(b"EMCBUF");
+			self.dsp.blit_at(self.buf, 240/2-3*9, 135/2-9, 6*9, 18);
+			self.state = StickUIState::Logo;
+			self.last_update = t;
 			}
 		}
-		match t & 8 {
-			0 => self.leds[0].as_mut().and_then(|l| Some(l.set_low())),
-			_ => self.leds[0].as_mut().and_then(|l| Some(l.set_high()))
-		};
+		if self.leds[0].is_some() {
+			match t & 8 {
+				0 => { self.leds[0].as_mut().unwrap().set_low().ok(); },
+				_ => { self.leds[0].as_mut().unwrap().set_high().ok(); }
+			};
+		}
+	}
+
+	fn prepare_text(&mut self, txt: &[u8]) {
+		for i in 0..6 {
+			if i >= txt.len() {
+				break;
+			}
+			let mut c: usize = txt[i] as usize;
+			if c >= 0x20 && c < 0x80 {		// [0x20:0x7f] map to texture map positions [0x00:0x5f]
+				c -= 0x20;
+			} else if c >= 0xa0 {			// [0xa0:0xff] map to texture map positions [0x60:0xbf]
+				c -= 0x40;
+			} else {
+				continue;
+			}
+			rtt_target::rprintln!("Ch {} {}", i, c);
+
+			// memcpy from FONT[c*9*18] to self.buf[bufpos*9*18]
+			unsafe { __aeabi_memcpy(self.buf[i*9*18*2] as *mut u8, FONT[c*9*18*2] as *const u8, 9*18*2); }
+		}
+	}
+
+	fn tile_bg(&mut self) {
+		for x in 0..4 {
+			for y in 0..9 {
+				self.dsp.blit_at(self.buf, x*60, y*15, 60, 15);
+			}
+		}
 	}
 }
 
@@ -170,11 +197,19 @@ impl Display {
 		self.backlight_pin.set_high().ok();
 	}
 
+	pub fn blit_at(&mut self, buf: &[u8], x: u16, y: u16, w: u16, h: u16) {
+		self.lldisplay.blit_pixels(x, y, w, h, buf).ok();
+	}
+
 	pub fn blit(&mut self, buf: &[u8]) {
-		self.lldisplay.blit_pixels(0, 0, 240, 135, buf).ok();
+		self.blit_at(buf, 0, 0, 240, 135)
 	}
 
 	pub fn clear(&mut self, color: Rgb565) {
 		self.lldisplay.clear(color).ok();
 	}
+}
+
+extern "C" {
+	fn __aeabi_memcpy(dst: *mut u8, src: *const u8, len: usize);
 }

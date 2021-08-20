@@ -29,12 +29,9 @@ compile_error!{"No board target chosen! Set your board using --feature; see Carg
 mod board;
 
 mod flash;
-mod rle;
 mod types;
 mod ui;
 mod usb;
-
-static TRUSSED_LOGO_RLE: &[u8; 4582] = include_bytes!("../trussed_logo.img.rle");
 
 /* TODO: add external flash */
 littlefs2::const_ram_storage!(ExternalStore, 1024);
