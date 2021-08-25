@@ -20,12 +20,20 @@ type LLDisplay = picolcd114::ST7789<display_interface_spi::SPIInterfaceNoCS<Spim
 enum StickUIState {
 	PreInitGarbled,
 	Logo,
-	Blank,
+	Idle,
+	// ShowRequest
 }
 
-/* sufficient (rgb565) room for a 32x32 sprite or 6 9x18 characters */
+pub enum StickBatteryState {
+	USBPowered,
+	Unknown,
+	Percentage(u32)
+}
+
+/* sufficient (rgb565) room for a 32x32 sprite, a 60x15 sprite or six 9x18 characters */
 static mut DISPLAY_BUF: [u8; 2048] = [0; 2048];
-const FONT: &[u8; 62208] = include_bytes!("../data/font_9x18.raw");
+const FONT: &[u8; (9*18*2)*192] = include_bytes!("../data/font_9x18.raw");
+const BATTERY: &[u8; (25*60*2)] = include_bytes!("../data/texmap.raw");
 
 pub struct StickUI {
 	buf: &'static mut [u8; 2048],
@@ -33,18 +41,25 @@ pub struct StickUI {
 	buttons: [Option<InPin>; 8],
 	leds: [Option<OutPin>; 4],
 	state: StickUIState,
+	battery_state: StickBatteryState,
 	last_update: u32
 }
 
 impl StickUI {
 	pub fn new(dsp: Display, buttons: [Option<InPin>; 8], leds: [Option<OutPin>; 4]) -> Self {
 		let xbuf = unsafe { &mut DISPLAY_BUF };
-		Self { buf: xbuf, dsp, buttons, leds, state: StickUIState::PreInitGarbled, last_update: 0 }
+		Self {
+			buf: xbuf, dsp, buttons, leds,
+			state: StickUIState::PreInitGarbled,
+			battery_state: StickBatteryState::Unknown,
+			last_update: 0 }
 	}
 
 	pub fn check_buttons(&self) {
-		if self.buttons[0].as_ref().map_or_else(|| false, |b| b.is_low().unwrap()) {
-			/* do something */
+		for i in 0..8 {
+			if self.buttons[i].as_ref().map_or_else(|| false, |b| b.is_low().unwrap()) {
+				rtt_target::rprintln!("Button {}", i);
+			}
 		}
 	}
 
@@ -59,63 +74,92 @@ impl StickUI {
 		// one day, replace all this nonsense with a tasty call to __aeabi_memset4()
 		// or figure out the "proper" Rust incantation the compiler happens to grasp
 		for i in (0..buflen).step_by(2) {
-			self.buf[i+0] = ch;
-			self.buf[i+1] = cl;
+			self.buf[i+0] = cl;
+			self.buf[i+1] = ch;
 		}
 	}
 
 	pub fn refresh(&mut self, t: u32) {
-		match self.state {
-		StickUIState::PreInitGarbled => {
-			rtt_target::rprintln!("UI P");
-			self.rgb16_memset(embedded_graphics::pixelcolor::Rgb565::BLACK);
-			self.tile_bg();
-			self.state = StickUIState::Blank;
-			self.last_update = t;
-			}
-		StickUIState::Logo => {
-			rtt_target::rprintln!("UI L");
-			}
-		StickUIState::Blank => {
-			rtt_target::rprintln!("UI B");
-			self.prepare_text(b"EMCBUF");
-			self.dsp.blit_at(self.buf, 240/2-3*9, 135/2-9, 6*9, 18);
-			self.state = StickUIState::Logo;
-			self.last_update = t;
-			}
-		}
 		if self.leds[0].is_some() {
 			match t & 8 {
 				0 => { self.leds[0].as_mut().unwrap().set_low().ok(); },
 				_ => { self.leds[0].as_mut().unwrap().set_high().ok(); }
 			};
 		}
+
+		if self.last_update + 32 > t {
+			return;
+		}
+
+		match self.state {
+		StickUIState::PreInitGarbled => {
+			rtt_target::rprintln!("UI P");
+			self.rgb16_memset(embedded_graphics::pixelcolor::Rgb565::BLACK);
+			self.tile_bg();
+			self.state = StickUIState::Idle;
+			self.last_update = t;
+			}
+		StickUIState::Logo => {
+			self.last_update = t;
+			}
+		StickUIState::Idle => {
+			rtt_target::rprintln!("UI B");
+			self.prepare_text(b"-TEST-");
+			self.dsp.blit_at(&self.buf[0..6*9*18*2], 240/2-3*9, 135/2-9, 6*9, 18);
+			let battoff: isize = match self.battery_state {
+			StickBatteryState::USBPowered => { 0*25*10*2 },
+			StickBatteryState::Unknown => { 1*25*10*2 },
+			StickBatteryState::Percentage(x) if x < 15 => { 2*25*10*2 },
+			StickBatteryState::Percentage(x) if x >= 15 && x < 50 => { 3*25*10*2 },
+			StickBatteryState::Percentage(x) if x >= 50 && x < 80 => { 4*25*10*2 },
+			StickBatteryState::Percentage(_) => { 5*25*10*2 },
+			};
+			unsafe { __aeabi_memcpy(self.buf as *mut u8, (BATTERY as *const u8).offset(battoff), 25*10*2); }
+			self.dsp.blit_at(&self.buf[0..25*10*2], 240-25, 0, 25, 10);
+			self.state = StickUIState::Logo;
+			self.last_update = t;
+			}
+		}
 	}
 
 	fn prepare_text(&mut self, txt: &[u8]) {
+		use core::convert::TryInto;
+
+		let mut txtlen = txt.len();
+		if txt[txtlen-1] == 0 {		/* chop off trailing null byte */
+			txtlen -= 1;
+		}
+		if txtlen > 6 {
+			self.prepare_text(b"LENERR");
+			return;
+		}
 		for i in 0..6 {
 			if i >= txt.len() {
 				break;
 			}
-			let mut c: usize = txt[i] as usize;
-			if c >= 0x20 && c < 0x80 {		// [0x20:0x7f] map to texture map positions [0x00:0x5f]
-				c -= 0x20;
-			} else if c >= 0xa0 {			// [0xa0:0xff] map to texture map positions [0x60:0xbf]
-				c -= 0x40;
-			} else {
-				continue;
-			}
+			let c: usize =
+			if txt[i] >= 0x20 && txt[i] < 0x80 {		// [0x20:0x7f] map to font positions [0x00:0x5f]
+				(txt[i] - 0x20) as usize
+			} else if txt[i] >= 0xa0 {			// [0xa0:0xff] map to font positions [0x60:0xbf]
+				(txt[i] - 0x40) as usize
+			} else {					// illegal char ('admit one' symbol)
+				(0x7f - 0x20) as usize
+			};
 			rtt_target::rprintln!("Ch {} {}", i, c);
-
-			// memcpy from FONT[c*9*18] to self.buf[bufpos*9*18]
-			unsafe { __aeabi_memcpy(self.buf[i*9*18*2] as *mut u8, FONT[c*9*18*2] as *const u8, 9*18*2); }
+			for y in 0..18 {
+				let doff: isize = ((y*txtlen + i)*9*2).try_into().unwrap();
+				let soff: isize = ((c*18 + y)*9*2).try_into().unwrap();
+				unsafe { __aeabi_memcpy((self.buf as *mut u8).offset(doff),
+						(FONT as *const u8).offset(soff),
+						9*2); }
+			}
 		}
 	}
 
 	fn tile_bg(&mut self) {
 		for x in 0..4 {
 			for y in 0..9 {
-				self.dsp.blit_at(self.buf, x*60, y*15, 60, 15);
+				self.dsp.blit_at(&self.buf[0..60*15*2], x*60, y*15, 60, 15);
 			}
 		}
 	}
@@ -198,7 +242,14 @@ impl Display {
 	}
 
 	pub fn blit_at(&mut self, buf: &[u8], x: u16, y: u16, w: u16, h: u16) {
-		self.lldisplay.blit_pixels(x, y, w, h, buf).ok();
+		// use core::iter::repeat;
+		// let constcol = Into::<RawU16>::into(embedded_graphics::pixelcolor::Rgb565::YELLOW).into_inner();
+
+		let r = self.lldisplay.blit_pixels(x, y, w, h, buf);
+		if r.is_err() {
+			rtt_target::rprintln!("BlitAt ERR");
+		}
+		// self.lldisplay.set_pixels(x, y, x+w-1, y+h-1, repeat(constcol)).ok();
 	}
 
 	pub fn blit(&mut self, buf: &[u8]) {

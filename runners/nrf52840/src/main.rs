@@ -67,6 +67,10 @@ impl admin_app::Reboot for NRFReboot {
 
 type TrussedClient = trussed::ClientImplementation<NRFSyscall>;
 
+enum FrontendOp {
+	RefreshUI(u32),
+}
+
 #[rtic::app(device = nrf52840_hal::pac, peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
 const APP: () = {
 	struct Resources {
@@ -216,8 +220,6 @@ const APP: () = {
 		rtc.enable_interrupt(RtcInterrupt::Tick, None);
 		rtc.enable_counter();
 
-		// ctx.spawn.frontend().ok();
-
 		gpiote.port().enable_interrupt();
 		power.intenset.write(|w| w.pofwarn().set_bit().usbdetected().set_bit().usbremoved().set_bit().usbpwrrdy().set_bit());
 
@@ -248,11 +250,24 @@ const APP: () = {
 		// loop {}
 	}
 
-	#[task(priority = 1, resources = [rtc, ui, usb_dispatcher, fido_app, admin_app])] /* SWI5_EGU5 */
-	fn frontend(ctx: frontend::Context) {
-		let frontend::Resources { mut rtc, ui, usb_dispatcher, fido_app, admin_app} = ctx.resources;
+	#[task(priority = 1, resources = [ui])]
+	fn frontend(ctx: frontend::Context, op: FrontendOp) {
+		let frontend::Resources { ui } = ctx.resources;
 
-		rtt_target::rprintln!("irq SW5");
+		/*
+		   This is the function where we perform least-urgency stuff, like rendering
+		   display contents.
+		*/
+		match op {
+		FrontendOp::RefreshUI(x) => { ui.refresh(x); }
+		}
+	}
+
+	#[task(priority = 1, resources = [usb_dispatcher, fido_app, admin_app])]
+	fn userspace_apps(ctx: userspace_apps::Context) {
+		let userspace_apps::Resources { usb_dispatcher, fido_app, admin_app} = ctx.resources;
+
+		rtt_target::rprintln!("UA");
 		//usb_dispatcher.lock(|usb_dispatcher| {
 		if usb_dispatcher.is_some() {
 			cortex_m::peripheral::NVIC::mask(nrf52840_hal::pac::Interrupt::USBD);
@@ -265,13 +280,6 @@ const APP: () = {
 		}
 		//});
 
-		/*
-		   This is the function where we perform least-urgency stuff, like rendering
-		   display contents.
-		*/
-		let mut rtc_time: u32 = 0;
-		rtc.lock(|rtc| rtc_time = rtc.get_counter() );
-		ui.refresh(rtc_time);
 	}
 
 	#[task(priority = 1, resources = [pre_usb, usb, usb_dispatcher])]
@@ -293,10 +301,10 @@ const APP: () = {
 		ctx.resources.trussed_service.process();
 	}
 
-	#[task(priority = 3, binds = GPIOTE, resources = [power, gpiote])]
+	#[task(priority = 1, binds = GPIOTE, resources = [power, ui, gpiote])]
 	fn irq_gpiote(ctx: irq_gpiote::Context) {
 		rtt_target::rprintln!("irq GPIO");
-		// ctx.resources.ui.check_buttons();
+		ctx.resources.ui.check_buttons();
 		ctx.resources.gpiote.reset_events();
 	}
 
@@ -320,12 +328,14 @@ const APP: () = {
 		}
 	}
 
-	#[task(priority = 4, binds = RTC0, resources = [rtc], spawn = [frontend])]
+	#[task(priority = 4, binds = RTC0, resources = [rtc], spawn = [frontend, userspace_apps])]
 	fn rtc_handler(ctx: rtc_handler::Context) {
 		let rtc_count = ctx.resources.rtc.get_counter();
 		rtt_target::rprintln!("irq RTC {:x}", rtc_count);
 		ctx.resources.rtc.reset_event(RtcInterrupt::Tick);
-		ctx.spawn.frontend().ok();
+		let rtc_time = ctx.resources.rtc.get_counter();
+		ctx.spawn.frontend(FrontendOp::RefreshUI(rtc_time)).ok();
+		ctx.spawn.userspace_apps().ok();
 	}
 
 	#[task(priority = 3, binds = POWER_CLOCK, resources = [power], spawn = [late_setup_usb])]
@@ -419,6 +429,12 @@ pub fn uart_debug(uart: &mut Uarte<nrf52840_hal::pac::UARTE0>, buf: &[u8], val: 
 		}
 		Err(nrf52840_hal::uarte::Error::Timeout(_)) => {
 			rtt_target::rprintln!("TXE5");
+		}
+		Err(nrf52840_hal::uarte::Error::TxBufferTooSmall) => {
+			rtt_target::rprintln!("TXE6");
+		}
+		Err(nrf52840_hal::uarte::Error::RxBufferTooSmall) => {
+			rtt_target::rprintln!("TXE7");
 		}
 	}
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
 import os
+import struct
 import subprocess
 import sys
 
@@ -12,10 +13,24 @@ def get_img_dim(fn):
 	dim = pout.strip().split(" ")[2].split("x")
 	return int(dim[0]), int(dim[1])
 
-def png_to_raw565(fn, cw, ch, cntx, cnty):
+"""Convert an image from PNG to raw RGB565 pixel data, optionally reordering
+   the pixels so that the contained sprites (each cw*ch pixels wide, tiled
+   on a cntx*cnty grid) are placed into a single ch pixels wide column.
+"""
+def png_to_raw565(fn, cw=None, ch=None, cntx=None, cnty=None):
 	iw, ih = get_img_dim(fn)
-	assert iw == cw*cntx
-	assert ih == ch*cnty
+	if cw is None:
+		cw = iw
+		ch = ih
+		cntx = 1
+		cnty = 1
+	else:
+		assert iw == cw*cntx
+		assert ih == ch*cnty
+	if iw % 2 != 0:
+		iwpadded = iw + 1
+	else:
+		iwpadded = iw
 	fnbmp = fn.replace(".png", ".bmp")
 	fnraw = fn.replace(".png", ".raw")
 
@@ -27,27 +42,32 @@ def png_to_raw565(fn, cw, ch, cntx, cnty):
 
 	fo = open(fnraw, "wb")
 	with open(fnbmp, "rb") as fb:
-		fb.seek(138)
-		bmpdata = fb.read()
-	assert len(bmpdata) == iw*ih*2
+		fb.seek(0x0a)
+		pxoff, = struct.unpack("<I", fb.read(4))
+		fb.seek(0x12)
+		iw_, ih_ = struct.unpack("<II", fb.read(8))
+		assert iw_ == iw and ih_ == ih
+		fb.seek(0x22)
+		pxsz, = struct.unpack("<I", fb.read(4))
+		assert pxsz == iwpadded*ih*2
+		fb.seek(pxoff)
+		bmpdata = fb.read(pxsz)
+	assert len(bmpdata) == iwpadded*ih*2
 
 	for i in range(cntx*cnty):
 		charposx = i % cntx
 		charposy = i // cntx
-		bytepos = (ih-1-(charposy*ch))*iw*2 + (charposx*cw)*2
+		bytepos = (ih-1-(charposy*ch))*iwpadded*2 + (charposx*cw)*2
 		for y in range(ch):
-			rowpos = bytepos - y*2*iw
+			rowpos = bytepos - y*2*iwpadded
 			fo.write(bmpdata[rowpos:rowpos+2*cw])
 
 	fo.close()
+	# comment this out to debug PNG->BMP->RAW conversion
 	os.unlink(fnbmp)
 
-try:
-	png_to_raw565("font_9x18.png", 9, 18, 16, 12)
-	png_to_raw565("font_9x18_bold.png", 9, 18, 16, 12)
-except FileNotFoundError:
-	print("ERROR: font files from embedded-graphics crate needed.")
-	print("Please copy or symlink fonts/png/font_9x18*.png here.")
-	sys.exit(1)
+png_to_raw565("font_9x18.png", 9, 18, 16, 12)
+png_to_raw565("font_9x18_bold.png", 9, 18, 16, 12)
+png_to_raw565("texmap.png")
 
 sys.exit(0)
