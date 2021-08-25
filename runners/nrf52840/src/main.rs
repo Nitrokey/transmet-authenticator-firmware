@@ -69,6 +69,7 @@ type TrussedClient = trussed::ClientImplementation<NRFSyscall>;
 
 enum FrontendOp {
 	RefreshUI(u32),
+	SetBatteryState(ui::StickBatteryState),
 }
 
 #[rtic::app(device = nrf52840_hal::pac, peripherals = true, monotonic = rtic::cyccnt::CYCCNT)]
@@ -250,7 +251,7 @@ const APP: () = {
 		// loop {}
 	}
 
-	#[task(priority = 1, resources = [ui])]
+	#[task(priority = 1, resources = [ui], capacity = 4)]
 	fn frontend(ctx: frontend::Context, op: FrontendOp) {
 		let frontend::Resources { ui } = ctx.resources;
 
@@ -259,7 +260,8 @@ const APP: () = {
 		   display contents.
 		*/
 		match op {
-		FrontendOp::RefreshUI(x) => { ui.refresh(x); }
+		FrontendOp::RefreshUI(x) => { ui.refresh(x); },
+		FrontendOp::SetBatteryState(x) => { ui.set_battery(x); }
 		}
 	}
 
@@ -270,16 +272,15 @@ const APP: () = {
 		rtt_target::rprintln!("UA");
 		//usb_dispatcher.lock(|usb_dispatcher| {
 		if usb_dispatcher.is_some() {
-			cortex_m::peripheral::NVIC::mask(nrf52840_hal::pac::Interrupt::USBD);
+			// cortex_m::peripheral::NVIC::mask(nrf52840_hal::pac::Interrupt::USBD);
 			let b = usb_dispatcher.as_mut().unwrap().poll_apps(&mut [fido_app, admin_app]);
 			if b {
 				rtt_target::rprintln!("rUSB");
 				rtic::pend(nrf52840_hal::pac::Interrupt::USBD);
 			}
-			unsafe { cortex_m::peripheral::NVIC::unmask(nrf52840_hal::pac::Interrupt::USBD); }
+			// unsafe { cortex_m::peripheral::NVIC::unmask(nrf52840_hal::pac::Interrupt::USBD); }
 		}
 		//});
-
 	}
 
 	#[task(priority = 1, resources = [pre_usb, usb, usb_dispatcher])]
@@ -301,7 +302,7 @@ const APP: () = {
 		ctx.resources.trussed_service.process();
 	}
 
-	#[task(priority = 1, binds = GPIOTE, resources = [power, ui, gpiote])]
+	#[task(priority = 1, binds = GPIOTE, resources = [ui, gpiote])]
 	fn irq_gpiote(ctx: irq_gpiote::Context) {
 		rtt_target::rprintln!("irq GPIO");
 		ctx.resources.ui.check_buttons();
@@ -338,7 +339,7 @@ const APP: () = {
 		ctx.spawn.userspace_apps().ok();
 	}
 
-	#[task(priority = 3, binds = POWER_CLOCK, resources = [power], spawn = [late_setup_usb])]
+	#[task(priority = 3, binds = POWER_CLOCK, resources = [power], spawn = [frontend, late_setup_usb])]
 	fn power_handler(ctx: power_handler::Context) {
 		let power = &ctx.resources.power;
 		let pwrM = power.mainregstatus.read().bits();
@@ -350,6 +351,7 @@ const APP: () = {
 			ctx.spawn.late_setup_usb().ok();
 			// instantiate();
 			power.events_usbdetected.write(|w| unsafe { w.bits(0) });
+			ctx.spawn.frontend(FrontendOp::SetBatteryState(ui::StickBatteryState::Charging(10))).ok();
 		}
 
 		if power.events_usbpwrrdy.read().events_usbpwrrdy().bits() {
@@ -359,82 +361,12 @@ const APP: () = {
 		if power.events_usbremoved.read().events_usbremoved().bits() {
 			// deinstantiate();
 			power.events_usbremoved.write(|w| unsafe { w.bits(0) });
+			ctx.spawn.frontend(FrontendOp::SetBatteryState(ui::StickBatteryState::Discharging(10))).ok();
 		}
 	}
 
 	extern "C" {
+		fn SWI4_EGU4();
 		fn SWI5_EGU5();
 	}
 };
-
-const CRLF: [u8; 2] = [13, 10];
-
-pub fn u32_to_hex08(v: u32, buf: &mut [u8; 8], pad: bool) -> &[u8] {
-	const HEX: [u8; 16] = [48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 97, 98, 99, 100, 101, 102];
-	let mut i: usize = 8;
-	let mut vv: u32 = v;
-
-	while i > 0 {
-		i -= 1;
-		buf[i] = HEX[(vv & 15) as usize];
-		vv >>= 4;
-		if (!pad) && (vv == 0) {
-			return &buf[i+1..];
-		}
-	}
-
-	return &buf[..];
-}
-
-pub fn uart_debug(uart: &mut Uarte<nrf52840_hal::pac::UARTE0>, buf: &[u8], val: Option<u32>) {
-	let mut res: Result<_, _>;
-	let mut mutbuf = [0u8; 8];
-	let mut i: usize = 0;
-
-	while (i < 8) && (i < buf.len()) {
-		mutbuf[i] = buf[i];
-		i += 1;
-	}
-
-	res = uart.write(&mutbuf[0..i]);
-
-	if res.is_ok() {
-		if let Some(iv) = val {
-			res = uart.write(u32_to_hex08(iv, &mut mutbuf, false));
-		}
-	}
-
-	if res.is_ok() {
-		mutbuf[0] = CRLF[0];
-		mutbuf[1] = CRLF[1];
-		res = uart.write(&mutbuf[0..2]);
-	}
-
-	match res {
-		Ok(_) => (),
-		Err(nrf52840_hal::uarte::Error::BufferNotInRAM) => {
-			rtt_target::rprintln!("TXE0");
-		}
-		Err(nrf52840_hal::uarte::Error::TxBufferTooLong) => {
-			rtt_target::rprintln!("TXE1");
-		}
-		Err(nrf52840_hal::uarte::Error::RxBufferTooLong) => {
-			rtt_target::rprintln!("TXE2");
-		}
-		Err(nrf52840_hal::uarte::Error::Receive) => {
-			rtt_target::rprintln!("TXE3");
-		}
-		Err(nrf52840_hal::uarte::Error::Transmit) => {
-			rtt_target::rprintln!("TXE4");
-		}
-		Err(nrf52840_hal::uarte::Error::Timeout(_)) => {
-			rtt_target::rprintln!("TXE5");
-		}
-		Err(nrf52840_hal::uarte::Error::TxBufferTooSmall) => {
-			rtt_target::rprintln!("TXE6");
-		}
-		Err(nrf52840_hal::uarte::Error::RxBufferTooSmall) => {
-			rtt_target::rprintln!("TXE7");
-		}
-	}
-}

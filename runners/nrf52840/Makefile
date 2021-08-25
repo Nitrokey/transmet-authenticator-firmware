@@ -16,6 +16,7 @@ build-$(1)-$(2):
 	arm-none-eabi-nm $(OUTDIR2)/$(2)/runner | grep ' [Tt] ' | sort | c++filt > symbols-$(1)-$(2).txt
 	arm-none-eabi-objcopy -O ihex $(OUTDIR2)/$(2)/runner $(OUTDIR2)/$(2)/runner-$(1).ihex
 	mv $(OUTDIR2)/$(2)/runner $(OUTDIR2)/$(2)/runner-$(1)
+	arm-none-eabi-readelf -l $(OUTDIR2)/$(2)/runner-$(1) | grep LOAD
 endef
 
 $(eval $(call build-template,proto1,debug))

@@ -13,9 +13,10 @@ def get_img_dim(fn):
 	dim = pout.strip().split(" ")[2].split("x")
 	return int(dim[0]), int(dim[1])
 
+SEEN_RGBVALS = {}
 """Convert an image from PNG to raw RGB565 pixel data, optionally reordering
    the pixels so that the contained sprites (each cw*ch pixels wide, tiled
-   on a cntx*cnty grid) are placed into a single ch pixels wide column.
+   on a cntx*cnty grid) are placed into a single 1*ch pixels wide column.
 """
 def png_to_raw565(fn, cw=None, ch=None, cntx=None, cnty=None):
 	iw, ih = get_img_dim(fn)
@@ -60,7 +61,20 @@ def png_to_raw565(fn, cw=None, ch=None, cntx=None, cnty=None):
 		bytepos = (ih-1-(charposy*ch))*iwpadded*2 + (charposx*cw)*2
 		for y in range(ch):
 			rowpos = bytepos - y*2*iwpadded
-			fo.write(bmpdata[rowpos:rowpos+2*cw])
+			for x in range(cw):
+				rgbval, = struct.unpack("<H", bmpdata[rowpos+2*x:rowpos+2*x+2])
+				rval = (rgbval >> 11) & 0x1f
+				gval = (rgbval >> 5) & 0x3f
+				bval = (rgbval & 0x1f)
+				if rgbval not in SEEN_RGBVALS.keys():
+					print("New RGB value: %04x => (%02x, %02x, %02x)" % (rgbval, rval, gval, bval))
+					SEEN_RGBVALS[rgbval] = True
+				reverseval = (bval << 11) | (gval << 5) | rval
+				# write with reversed components
+				## fo.write(struct.pack("<H", reverseval))
+				# write big-endian, original order
+				fo.write(struct.pack(">H", rgbval))
+			# fo.write(bmpdata[rowpos:rowpos+2*cw])
 
 	fo.close()
 	# comment this out to debug PNG->BMP->RAW conversion

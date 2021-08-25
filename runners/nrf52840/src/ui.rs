@@ -25,9 +25,9 @@ enum StickUIState {
 }
 
 pub enum StickBatteryState {
-	USBPowered,
 	Unknown,
-	Percentage(u32)
+	Discharging(u32),
+	Charging(u32),		/* supposedly via USB */
 }
 
 /* sufficient (rgb565) room for a 32x32 sprite, a 60x15 sprite or six 9x18 characters */
@@ -41,8 +41,8 @@ pub struct StickUI {
 	buttons: [Option<InPin>; 8],
 	leds: [Option<OutPin>; 4],
 	state: StickUIState,
+	update_due: u32,
 	battery_state: StickBatteryState,
-	last_update: u32
 }
 
 impl StickUI {
@@ -52,7 +52,7 @@ impl StickUI {
 			buf: xbuf, dsp, buttons, leds,
 			state: StickUIState::PreInitGarbled,
 			battery_state: StickBatteryState::Unknown,
-			last_update: 0 }
+			update_due: 0 }
 	}
 
 	pub fn check_buttons(&self) {
@@ -80,14 +80,16 @@ impl StickUI {
 	}
 
 	pub fn refresh(&mut self, t: u32) {
+		/* LED heartbeat (DK only, our prototype has no LEDs) */
 		if self.leds[0].is_some() {
-			match t & 8 {
-				0 => { self.leds[0].as_mut().unwrap().set_low().ok(); },
-				_ => { self.leds[0].as_mut().unwrap().set_high().ok(); }
-			};
+			if (t & 15) == 0 {
+				self.leds[0].as_mut().unwrap().set_low().ok();
+			} else if (t & 15) == 8 {
+				self.leds[0].as_mut().unwrap().set_high().ok();
+			}
 		}
 
-		if self.last_update + 32 > t {
+		if t < self.update_due {
 			return;
 		}
 
@@ -96,29 +98,56 @@ impl StickUI {
 			rtt_target::rprintln!("UI P");
 			self.rgb16_memset(embedded_graphics::pixelcolor::Rgb565::BLACK);
 			self.tile_bg();
-			self.state = StickUIState::Idle;
-			self.last_update = t;
+			self.state = StickUIState::Logo;
+			self.update_due = t+1;
 			}
 		StickUIState::Logo => {
-			self.last_update = t;
+			/* blit some fancy logo once we have one ... */
+			self.render_text(b"-LOGO-", 10, 3);
+			self.state = StickUIState::Idle;
+			self.update_due = t + 32;
 			}
 		StickUIState::Idle => {
 			rtt_target::rprintln!("UI B");
-			self.prepare_text(b"-TEST-");
-			self.dsp.blit_at(&self.buf[0..6*9*18*2], 240/2-3*9, 135/2-9, 6*9, 18);
-			let battoff: isize = match self.battery_state {
-			StickBatteryState::USBPowered => { 0*25*10*2 },
-			StickBatteryState::Unknown => { 1*25*10*2 },
-			StickBatteryState::Percentage(x) if x < 15 => { 2*25*10*2 },
-			StickBatteryState::Percentage(x) if x >= 15 && x < 50 => { 3*25*10*2 },
-			StickBatteryState::Percentage(x) if x >= 50 && x < 80 => { 4*25*10*2 },
-			StickBatteryState::Percentage(_) => { 5*25*10*2 },
+			// self.rgb16_memset(embedded_graphics::pixelcolor::Rgb565::BLACK);
+			// self.tile_bg();
+			let battsprite: isize = match self.battery_state {
+			StickBatteryState::Unknown => { 1 },
+			StickBatteryState::Charging(x) => { charge_ani_frame(t, x) },
+			StickBatteryState::Discharging(x) => { charge_ani_frame(0, x) }
 			};
-			unsafe { __aeabi_memcpy(self.buf as *mut u8, (BATTERY as *const u8).offset(battoff), 25*10*2); }
-			self.dsp.blit_at(&self.buf[0..25*10*2], 240-25, 0, 25, 10);
-			self.state = StickUIState::Logo;
-			self.last_update = t;
+			unsafe { __aeabi_memcpy(self.buf as *mut u8, (BATTERY as *const u8).offset(battsprite*25*10*2), 25*10*2); }
+			self.dsp.blit_at(&self.buf[0..25*10*2], 240-26, 2, 25, 10);
+			self.update_due = t + 8;
 			}
+		}
+	}
+
+	pub fn set_battery(&mut self, bat: StickBatteryState) {
+		self.battery_state = bat;
+	}
+
+	/*
+	 * Render a line of text at a given starting _text_ position.
+	 * Current screen real estate plan: 26x7 characters of a 9x18 font,
+	 * with an extra vertical space pixel (so effectively on a 9x19 grid).
+	 * Borders: top 1, left 1, right 5, bottom 1.
+	 * Pixel positions of top left glyph (cx,cy == 0,0): [1,1]--[9,19]
+	 * Pixel positions of bottom right glyph (cx,cy == 25,6): [226,115]--[234,133]
+	 */
+	fn render_text(&mut self, txt: &[u8], cx: u16, cy: u16) {
+		use core::cmp::min;
+
+		let mut cx_: u16 = cx;
+		let mut txtoff: u16 = 0;
+		let txtlen: u16 = txt.len() as u16;
+
+		while cx_ < 26 && txtoff < txtlen {
+			let chklen = min(min(26 - cx_, txtlen - txtoff), 6);
+			self.prepare_text(&txt[txtoff as usize..(txtoff+chklen) as usize]);
+			self.dsp.blit_at(&self.buf[0..(chklen*9*18*2) as usize], (cx_*9)+1, (cy*19)+1, chklen*9, 18);
+			cx_ += chklen;
+			txtoff += chklen;
 		}
 	}
 
@@ -145,7 +174,7 @@ impl StickUI {
 			} else {					// illegal char ('admit one' symbol)
 				(0x7f - 0x20) as usize
 			};
-			rtt_target::rprintln!("Ch {} {}", i, c);
+			// rtt_target::rprintln!("Ch {} {}", i, c);
 			for y in 0..18 {
 				let doff: isize = ((y*txtlen + i)*9*2).try_into().unwrap();
 				let soff: isize = ((c*18 + y)*9*2).try_into().unwrap();
@@ -163,6 +192,18 @@ impl StickUI {
 			}
 		}
 	}
+}
+
+fn charge_ani_frame(t: u32, perc: u32) -> isize {
+	let aniframe = (t >> 3) & 7;
+	if aniframe >= 4 {
+		return 0;
+	}
+	let aniperc = perc + ((100-perc) * aniframe) / 4;
+	if aniperc <= 15 { return 2; }
+	else if aniperc <= 50 { return 3; }
+	else if aniperc <= 80 { return 4; }
+	else { return 5; }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
