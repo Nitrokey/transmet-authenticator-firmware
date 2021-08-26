@@ -35,6 +35,64 @@ static mut DISPLAY_BUF: [u8; 2048] = [0; 2048];
 const FONT: &[u8; (9*18*2)*192] = include_bytes!("../data/font_9x18.raw");
 const BATTERY: &[u8; (25*60*2)] = include_bytes!("../data/texmap.raw");
 
+//////////////////////////////////////////////////////////////////////////////
+// SPRITE MANAGEMENT
+//////////////////////////////////////////////////////////////////////////////
+
+pub struct SpriteMap {
+	count_x: u16,
+	count_y: u16,
+	width: u16,
+	height: u16,
+	/* assume: bitsperpixel = 16 */
+	buf: &'static [u8],
+}
+
+const FONT_MAP: SpriteMap = SpriteMap { count_x: 1, count_y: 192, width: 9, height: 18, buf: FONT };
+const BATTERY_MAP: SpriteMap = SpriteMap { count_x: 1, count_y: 6, width: 25, height: 10, buf: BATTERY };
+
+pub enum SpriteErr {
+	UnknownError
+}
+
+impl SpriteMap {
+	pub fn draw(&self, index: u16, dbuf: &mut [u8], dstride: u16) -> Result<(), SpriteErr> {
+		use core::convert::TryInto;
+
+		if index > self.count_x*self.count_y {
+			return Err(SpriteErr::UnknownError);
+		}
+
+		let mut src_offset = index*self.width*self.height*2;
+		let mut dst_offset = 0u16;
+		if (self.count_x == 1) && ((dstride == 0) || (dstride == self.width*2)) { unsafe {
+			let dst = (dbuf.as_mut_ptr()).offset(dst_offset.try_into().map_err(|_| SpriteErr::UnknownError)?);
+			let src = (self.buf.as_ptr()).offset(src_offset.try_into().map_err(|_| SpriteErr::UnknownError)?);
+			__aeabi_memcpy(dst, src, (self.width*self.height*2) as usize);
+			}
+			return Ok(());
+		}
+		for _y in 0..self.height { unsafe {
+			let dst = (dbuf.as_mut_ptr()).offset(dst_offset.try_into().map_err(|_| SpriteErr::UnknownError)?);
+			let src = (self.buf.as_ptr()).offset(src_offset.try_into().map_err(|_| SpriteErr::UnknownError)?);
+			__aeabi_memcpy(dst, src, (self.width*2) as usize);
+			dst_offset += dstride;
+			src_offset += self.width*self.count_x*2;
+		}}
+		Ok(())
+	}
+}
+
+macro_rules! draw_sprite {
+($dsp:expr, $map:ident, $idx:expr, $px:expr, $py:expr) => {
+	$map.draw($idx, $dsp.buf, 0).ok();
+	$dsp.dsp.blit_at(&$dsp.buf[0..($map.width*$map.height*2) as usize], $px, $py, $map.width, $map.height);
+}}
+
+//////////////////////////////////////////////////////////////////////////////
+// UI
+//////////////////////////////////////////////////////////////////////////////
+
 pub struct StickUI {
 	buf: &'static mut [u8; 2048],
 	dsp: Display,
@@ -105,18 +163,19 @@ impl StickUI {
 			/* blit some fancy logo once we have one ... */
 			self.render_text(b"-LOGO-", 10, 3);
 			self.state = StickUIState::Idle;
-			self.update_due = t + 32;
+			self.update_due = (t + 32) & 0xffff_fff8u32;
 			}
 		StickUIState::Idle => {
 			rtt_target::rprintln!("UI B");
 			// self.rgb16_memset(embedded_graphics::pixelcolor::Rgb565::BLACK);
 			// self.tile_bg();
-			let battsprite: isize = match self.battery_state {
+			let battsprite: u16 = match self.battery_state {
 			StickBatteryState::Unknown => { 1 },
 			StickBatteryState::Charging(x) => { charge_ani_frame(t, x) },
 			StickBatteryState::Discharging(x) => { charge_ani_frame(0, x) }
 			};
-			unsafe { __aeabi_memcpy(self.buf as *mut u8, (BATTERY as *const u8).offset(battsprite*25*10*2), 25*10*2); }
+			draw_sprite!(self, BATTERY_MAP, battsprite, 240-26, 2);
+			BATTERY_MAP.draw(battsprite, self.buf, 0).ok();
 			self.dsp.blit_at(&self.buf[0..25*10*2], 240-26, 2, 25, 10);
 			self.update_due = t + 8;
 			}
@@ -166,22 +225,16 @@ impl StickUI {
 			if i >= txt.len() {
 				break;
 			}
-			let c: usize =
+			let c: u16 =
 			if txt[i] >= 0x20 && txt[i] < 0x80 {		// [0x20:0x7f] map to font positions [0x00:0x5f]
-				(txt[i] - 0x20) as usize
+				(txt[i] - 0x20) as u16
 			} else if txt[i] >= 0xa0 {			// [0xa0:0xff] map to font positions [0x60:0xbf]
-				(txt[i] - 0x40) as usize
+				(txt[i] - 0x40) as u16
 			} else {					// illegal char ('admit one' symbol)
-				(0x7f - 0x20) as usize
+				(0x7f - 0x20) as u16
 			};
-			// rtt_target::rprintln!("Ch {} {}", i, c);
-			for y in 0..18 {
-				let doff: isize = ((y*txtlen + i)*9*2).try_into().unwrap();
-				let soff: isize = ((c*18 + y)*9*2).try_into().unwrap();
-				unsafe { __aeabi_memcpy((self.buf as *mut u8).offset(doff),
-						(FONT as *const u8).offset(soff),
-						9*2); }
-			}
+
+			FONT_MAP.draw(c, &mut self.buf[i*9*2..], (txtlen*9*2).try_into().unwrap()).ok();
 		}
 	}
 
@@ -194,7 +247,7 @@ impl StickUI {
 	}
 }
 
-fn charge_ani_frame(t: u32, perc: u32) -> isize {
+fn charge_ani_frame(t: u32, perc: u32) -> u16 {
 	let aniframe = (t >> 3) & 7;
 	if aniframe >= 4 {
 		return 0;
@@ -283,14 +336,10 @@ impl Display {
 	}
 
 	pub fn blit_at(&mut self, buf: &[u8], x: u16, y: u16, w: u16, h: u16) {
-		// use core::iter::repeat;
-		// let constcol = Into::<RawU16>::into(embedded_graphics::pixelcolor::Rgb565::YELLOW).into_inner();
-
 		let r = self.lldisplay.blit_pixels(x, y, w, h, buf);
 		if r.is_err() {
 			rtt_target::rprintln!("BlitAt ERR");
 		}
-		// self.lldisplay.set_pixels(x, y, x+w-1, y+h-1, repeat(constcol)).ok();
 	}
 
 	pub fn blit(&mut self, buf: &[u8]) {
