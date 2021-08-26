@@ -146,6 +146,10 @@ const APP: () = {
 
 		rtt_target::rprintln!("Display");
 
+		if board_gpio.display_power.is_some() {
+			use nrf52840_hal::prelude::OutputPin;
+			board_gpio.display_power.as_mut().unwrap().set_low().ok();
+		}
 		let spi = Spim::new(ctx.device.SPIM0, board_gpio.display_spi.take().unwrap(),
 			nrf52840_hal::spim::Frequency::M8,
 			nrf52840_hal::spim::MODE_3,
@@ -167,6 +171,7 @@ const APP: () = {
 
 		let mut stickflash = flash::FlashStorage::new(ctx.device.NVMC, 0x000E_0000 as *mut u32, flash::FLASH_SIZE as usize);
 		if cfg!(feature = "reformat-flash") {
+			rtt_target::rprintln!("--> ERASING FLASH");
 			stickflash.erase(0, flash::FLASH_SIZE).ok();
 		}
 

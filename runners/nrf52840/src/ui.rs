@@ -317,13 +317,14 @@ impl Display {
 
 	pub fn power_off(&mut self) {
 		if self.power_gate.is_some() {
-			self.power_gate.as_mut().unwrap().set_low().ok();
+			self.power_gate.as_mut().unwrap().set_high().ok();
 		}
 	}
 
 	pub fn power_on(&mut self) {
 		if self.power_gate.is_some() {
-			self.power_gate.as_mut().unwrap().set_high().ok();
+			self.power_gate.as_mut().unwrap().set_low().ok();
+			/* TODO: repeat initialization procedure (lldisplay.init(delay_provider)) */
 		}
 	}
 
