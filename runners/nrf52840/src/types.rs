@@ -1,23 +1,35 @@
 use nrf52840_hal::{
-	gpio::{Pin, Input, Floating, Output, PushPull, PullDown, PullUp},
+	gpio::{Pin, Input, Output, PushPull, PullDown, PullUp},
 	spim,
+	twim,
+	uarte,
 };
 
 pub struct BoardGPIO {
+	/* interactive elements */
 	pub buttons: [Option<Pin<Input<PullUp>>>; 8],
 	pub leds: [Option<Pin<Output<PushPull>>>; 4],
-	pub uart_rx: Option<Pin<Input<Floating>>>,
-	pub uart_tx: Option<Pin<Output<PushPull>>>,
-	pub uart_cts: Option<Pin<Input<Floating>>>,
-	pub uart_rts: Option<Pin<Output<PushPull>>>,
+
+	/* UARTE0 */
+	pub uart_pins: Option<uarte::Pins>,
+
+	/* Fingerprint Reader (through UARTE0) */
 	pub fpr_detect: Option<Pin<Input<PullDown>>>,
 	pub fpr_power: Option<Pin<Output<PushPull>>>,
+
+	/* LCD (through SPIM0) */
 	pub display_spi: Option<spim::Pins>,
 	pub display_cs: Option<Pin<Output<PushPull>>>,
 	pub display_reset: Option<Pin<Output<PushPull>>>,
 	pub display_dc: Option<Pin<Output<PushPull>>>,
 	pub display_backlight: Option<Pin<Output<PushPull>>>,
 	pub display_power: Option<Pin<Output<PushPull>>>,
+
+	/* Secure Element (through TWIM1) */
+	pub se_pins: Option<twim::Pins>,
+	pub se_power: Option<Pin<Output<PushPull>>>,
+
+	/* External Flash & NFC (through SPIM2) */
 	pub flashnfc_spi: Option<spim::Pins>,
 	pub flash_cs: Option<Pin<Output<PushPull>>>,
 	pub flash_power: Option<Pin<Output<PushPull>>>,

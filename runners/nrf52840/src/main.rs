@@ -12,7 +12,8 @@ use nrf52840_hal::{
 	rng::Rng,
 	rtc::{Rtc, RtcInterrupt},
 	spim::Spim,
-	uarte::{Baudrate, Parity, Uarte},
+	twim::Twim,
+	uarte::{Baudrate, Parity, Stopbits, Uarte},
 };
 use rand_core::SeedableRng;
 use rtic::cyccnt::Instant;
@@ -29,6 +30,7 @@ compile_error!{"No board target chosen! Set your board using --feature; see Carg
 mod board;
 
 mod flash;
+mod se050;
 mod types;
 mod ui;
 mod usb;
@@ -131,17 +133,12 @@ const APP: () = {
 		rtt_target::rprintln!("Pins");
 
 		let mut board_gpio = board::init_gpio(&gpiote, p0, p1);
+		gpiote.reset_events();
 
 		rtt_target::rprintln!("UART");
 
-		let uart_pins = nrf52840_hal::uarte::Pins {
-					txd: board_gpio.uart_tx.take().unwrap(),
-					rxd: board_gpio.uart_rx.take().unwrap(),
-					cts: board_gpio.uart_cts,
-					rts: board_gpio.uart_rts
-		};
-		let uart = Uarte::new(ctx.device.UARTE0, uart_pins,
-				Parity::EXCLUDED, Baudrate::BAUD115200,
+		let uart = Uarte::new(ctx.device.UARTE0, board_gpio.uart_pins.take().unwrap(),
+				Parity::EXCLUDED, Baudrate::BAUD57600, Stopbits::TWO
 		);
 
 		rtt_target::rprintln!("Display");
@@ -166,6 +163,14 @@ const APP: () = {
 		let ui = ui::StickUI::new(disp, board_gpio.buttons, board_gpio.leds);
 
 		/* WIP: put together our hacked up LEGO bricks to create the Trussed service instance */
+
+		rtt_target::rprintln!("Secure Element");
+
+		if board_gpio.se_pins.is_some() {
+			let twim1 = Twim::new(ctx.device.TWIM1, board_gpio.se_pins.take().unwrap(), nrf52840_hal::twim::Frequency::K400);
+			let mut secelem = se050::Se050::new(twim1, board_gpio.se_power.take().unwrap());
+			secelem.enable();
+		}
 
 		rtt_target::rprintln!("Flash");
 
@@ -219,6 +224,13 @@ const APP: () = {
 		let clocks = Clocks::new(ctx.device.CLOCK).start_lfclk().enable_ext_hfosc();
 
 		let usb_preinit = usb::preinit(ctx.device.USBD, clocks);
+
+		rtt_target::rprintln!("Fingerprint Reader");
+
+		if board_gpio.fpr_power.is_some() {
+			use nrf52840_hal::prelude::OutputPin;
+			board_gpio.fpr_power.as_mut().unwrap().set_low().ok();
+		}
 
 		rtt_target::rprintln!("Finalizing");
 
@@ -307,11 +319,27 @@ const APP: () = {
 		ctx.resources.trussed_service.process();
 	}
 
-	#[task(priority = 1, binds = GPIOTE, resources = [ui, gpiote])]
+	#[task(priority = 1, binds = GPIOTE, resources = [ui, gpiote, uart])]
 	fn irq_gpiote(ctx: irq_gpiote::Context) {
 		rtt_target::rprintln!("irq GPIO");
 		ctx.resources.ui.check_buttons();
 		ctx.resources.gpiote.reset_events();
+
+		if cfg!(feature = "board-proto1") {
+			let pkt: [u8; 11+1] = [0xef, 0x01 /* magic */,
+						0xff, 0xff, 0xff, 0xff /* device address */,
+						0x01 /* COMMAND */,
+						0x00, 0x03 /* len */,
+						0x0f /* ReadSysPara */,
+						0x00, 0x13 /* checksum */];
+			ctx.resources.uart.write(&pkt).ok();
+			let mut rpkt: [u8; 11+16] = [0u8; 27];
+			ctx.resources.uart.read(&mut rpkt).ok();
+			for i in 0..27 {
+				rtt_target::rprintln!("UART R {:x}", rpkt[i]);
+			}
+		}
+
 	}
 
 	#[task(priority = 3, binds = USBD, resources = [usb])]

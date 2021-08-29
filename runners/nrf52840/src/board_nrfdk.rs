@@ -45,6 +45,10 @@ pub fn init_gpio(gpiote: &Gpiote, gpio_p0: p0::Parts, gpio_p1: p1::Parts) -> Boa
 	let u_rx = gpio_p0.p0_08.into_floating_input().degrade();
 	let u_tx = gpio_p0.p0_06.into_push_pull_output(Level::High).degrade();
 
+	let uart_pins = nrf52840_hal::uarte::Pins {
+		txd: u_tx, rxd: u_rx, cts: None, rts: None
+	};
+
 	/* Display SPI Bus */
 	let dsp_spi_dc = gpio_p1.p1_10.into_push_pull_output(Level::Low).degrade();
 	let dsp_spi_cs = gpio_p1.p1_11.into_push_pull_output(Level::Low).degrade();
@@ -78,10 +82,7 @@ pub fn init_gpio(gpiote: &Gpiote, gpio_p0: p0::Parts, gpio_p1: p1::Parts) -> Boa
 			Some(btn1), Some(btn2), Some(btn3), Some(btn4),
 			Some(btn5), Some(btn6), Some(btn7), Some(btn8) ],
 		leds: [ Some(led1), Some(led2), Some(led3), Some(led4) ],
-		uart_rx: Some(u_rx),
-		uart_tx: Some(u_tx),
-		uart_cts: None,
-		uart_rts: None,
+		uart_pins: Some(uart_pins),
 		fpr_detect: None,
 		fpr_power: None,
 		display_spi: Some(dsp_spi),
@@ -90,6 +91,8 @@ pub fn init_gpio(gpiote: &Gpiote, gpio_p0: p0::Parts, gpio_p1: p1::Parts) -> Boa
 		display_dc: Some(dsp_spi_dc),
 		display_backlight: Some(dsp_spi_bl),
 		display_power: None,
+		se_pins: None,
+		se_power: None,
 		flashnfc_spi: Some(flashnfc_spi),
 		flash_cs: Some(flash_spi_cs),
 		flash_power: None,

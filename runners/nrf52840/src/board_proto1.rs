@@ -46,7 +46,23 @@ pub fn init_gpio(gpiote: &Gpiote, gpio_p0: p0::Parts, gpio_p1: p1::Parts) -> Boa
 	let fp_detect = gpio_p1.p1_09.into_pulldown_input().degrade();
 	let fp_pwr = gpio_p0.p0_15.into_push_pull_output(Level::High).degrade();
 
+	let uart_pins = nrf52840_hal::uarte::Pins {
+		txd: fp_tx, rxd: fp_rx, cts: None, rts: None
+	};
+
 	gpiote.port().input_pin(&fp_detect).high();
+	// *** desperate attempt #1: force UART RX to pullup */
+	// unsafe { let fprx_reconf = 0x5000_072c as *mut u32; *fprx_reconf |= 0x0c; }
+
+	/* SE050 */
+	let se_pwr = gpio_p0.p0_20.into_push_pull_output(Level::Low).degrade();
+	let se_sda = gpio_p0.p0_24.into_floating_input().degrade();
+	let se_scl = gpio_p0.p0_22.into_floating_input().degrade();
+
+	let se_pins = nrf52840_hal::twim::Pins {
+		scl: se_scl,
+		sda: se_sda
+	};
 
 	/* Flash & NFC SPI Bus */
 	let flash_spi_cs = gpio_p0.p0_25.into_push_pull_output(Level::High).degrade();
@@ -67,10 +83,7 @@ pub fn init_gpio(gpiote: &Gpiote, gpio_p0: p0::Parts, gpio_p1: p1::Parts) -> Boa
 			Some(btn1), Some(btn2), Some(btn3), None,
 			None, None, None, None ],
 		leds: [ None, None, None, None ],
-		uart_rx: Some(fp_rx),
-		uart_tx: Some(fp_tx),
-		uart_cts: None,
-		uart_rts: None,
+		uart_pins: Some(uart_pins),
 		fpr_detect: Some(fp_detect),
 		fpr_power: Some(fp_pwr),
 		display_spi: Some(dsp_spi),
@@ -79,6 +92,8 @@ pub fn init_gpio(gpiote: &Gpiote, gpio_p0: p0::Parts, gpio_p1: p1::Parts) -> Boa
 		display_dc: Some(dsp_dc),
 		display_backlight: Some(dsp_bl),
 		display_power: Some(dsp_pwr),
+		se_pins: Some(se_pins),
+		se_power: Some(se_pwr),
 		flashnfc_spi: Some(flashnfc_spi),
 		flash_cs: Some(flash_spi_cs),
 		flash_power: Some(flash_pwr),
