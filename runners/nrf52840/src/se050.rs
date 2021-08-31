@@ -60,14 +60,45 @@ impl<T> Se050<T> where T: nrf52840_hal::twim::Instance {
 		let mut txbuf: [u8; 5] = [0x5a, 0b11000000 | (0 << 5) | (T1_S_CODES::IF_SOFT_RESET as u8), 0x00, 0x37, 0x7f];
 		let mut rxbuf: [u8; 48] = [0u8; 48];
 		self.power_pin.set_high().ok();
-		delay_provider.delay_ms(1u32);
-		self.twi.write(I2CS_SE050_ADDRESS, &txbuf).ok();
-		delay_provider.delay_ms(1u32);
-		self.twi.read(I2CS_SE050_ADDRESS, &mut rxbuf[0..3]).ok();
+		if self.retry_write(&mut delay_provider, &txbuf) {
+			return;
+		}
+		if self.retry_read(&mut delay_provider, &mut rxbuf[0..3]) {
+			return;
+		}
 		rtt_target::rprintln!("SE050 R-APDU: {:x} {:x} {:x}", rxbuf[0], rxbuf[1], rxbuf[2]);
 		if rxbuf[0] == 0xa5 {
 			let rlen: usize = (rxbuf[2] + 2) as usize;
-			self.twi.read(I2CS_SE050_ADDRESS, &mut rxbuf[0..rlen]).ok();
+			if self.retry_read(&mut delay_provider, &mut rxbuf[0..rlen]) {
+				// dump it out, parse it, whatever
+				return;
+			}
+		}
+	}
+
+	fn retry_write(&mut self, delay: &mut asm_delay::AsmDelay, buf: &[u8]) -> bool {
+		loop {
+			delay.delay_ms(1u32);
+			let err = self.twi.write(I2CS_SE050_ADDRESS, buf);
+			if err.is_ok() {
+				return false;
+			} else if err != Err(nrf52840_hal::twim::Error::AddressNack) {
+				rtt_target::rprintln!("TWIM W Err");
+				return true;
+			}
+		}
+	}
+
+	fn retry_read(&mut self, delay: &mut asm_delay::AsmDelay, buf: &mut [u8]) -> bool {
+		loop {
+			delay.delay_ms(1u32);
+			let err = self.twi.read(I2CS_SE050_ADDRESS, buf);
+			if err.is_ok() {
+				return false;
+			} else if err != Err(nrf52840_hal::twim::Error::AddressNack) {
+				rtt_target::rprintln!("TWIM R Err");
+				return true;
+			}
 		}
 	}
 }
