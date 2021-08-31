@@ -6,7 +6,7 @@ use embedded_graphics::{
 use nrf52840_hal::{
 	gpio::{Pin, Input, Output, PullUp, PushPull},
 	pac::SPIM0,
-	prelude::{InputPin, OutputPin},
+	prelude::OutputPin,
 	spim::Spim,
 };
 use trussed::{
@@ -113,9 +113,13 @@ impl StickUI {
 			update_due: 0 }
 	}
 
-	pub fn check_buttons(&self) {
+	pub fn check_buttons(&self, latches: &[u32]) {
 		for i in 0..8 {
-			if self.buttons[i].as_ref().map_or_else(|| false, |b| b.is_low().unwrap()) {
+			if self.buttons[i].is_none() {
+				break;
+			}
+			let buttonref = self.buttons[i].as_ref().unwrap();
+			if crate::types::is_pin_latched(buttonref, latches) {
 				rtt_target::rprintln!("Button {}", i);
 			}
 		}

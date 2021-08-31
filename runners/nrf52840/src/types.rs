@@ -36,3 +36,13 @@ pub struct BoardGPIO {
 	pub nfc_cs: Option<Pin<Output<PushPull>>>,
 	pub nfc_irq: Option<Pin<Input<PullUp>>>,
 }
+
+pub fn is_pin_latched<T>(pin: &Pin<Input<T>>, latches: &[u32]) -> bool {
+	let pinport = match pin.port() {
+		nrf52840_hal::gpio::Port::Port0 => 0,
+		nrf52840_hal::gpio::Port::Port1 => 1
+	};
+	let pinshift = pin.pin();
+
+	((latches[pinport] >> pinshift) & 1) != 0
+}

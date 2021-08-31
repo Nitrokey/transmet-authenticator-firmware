@@ -51,13 +51,11 @@ pub fn init_gpio(gpiote: &Gpiote, gpio_p0: p0::Parts, gpio_p1: p1::Parts) -> Boa
 	};
 
 	gpiote.port().input_pin(&fp_detect).high();
-	// *** desperate attempt #1: force UART RX to pullup */
-	// unsafe { let fprx_reconf = 0x5000_072c as *mut u32; *fprx_reconf |= 0x0c; }
 
 	/* SE050 */
 	let se_pwr = gpio_p0.p0_20.into_push_pull_output(Level::Low).degrade();
-	let se_sda = gpio_p0.p0_24.into_floating_input().degrade();
 	let se_scl = gpio_p0.p0_22.into_floating_input().degrade();
+	let se_sda = gpio_p0.p0_24.into_floating_input().degrade();
 
 	let se_pins = nrf52840_hal::twim::Pins {
 		scl: se_scl,

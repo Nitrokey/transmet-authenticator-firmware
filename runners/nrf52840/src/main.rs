@@ -13,7 +13,7 @@ use nrf52840_hal::{
 	rtc::{Rtc, RtcInterrupt},
 	spim::Spim,
 	twim::Twim,
-	uarte::{Baudrate, Parity, Stopbits, Uarte},
+	uarte::{Baudrate, Parity, Uarte},
 };
 use rand_core::SeedableRng;
 use rtic::cyccnt::Instant;
@@ -30,6 +30,7 @@ compile_error!{"No board target chosen! Set your board using --feature; see Carg
 mod board;
 
 mod flash;
+mod fpr;
 mod se050;
 mod types;
 mod ui;
@@ -80,7 +81,7 @@ const APP: () = {
 		gpiote: Gpiote,
 		ui: ui::StickUI,
 		trussed_service: trussed::service::Service<StickPlatform>,
-		uart: Uarte<nrf52840_hal::pac::UARTE0>,
+		finger: Option<fpr::FingerprintReader<nrf52840_hal::pac::UARTE0>>,
 		pre_usb: Option<usb::USBPreinitObjects>,
 		#[init(None)]
 		usb: Option<usb::USBObjects<'static>>,
@@ -138,7 +139,7 @@ const APP: () = {
 		rtt_target::rprintln!("UART");
 
 		let uart = Uarte::new(ctx.device.UARTE0, board_gpio.uart_pins.take().unwrap(),
-				Parity::EXCLUDED, Baudrate::BAUD57600, Stopbits::TWO
+				Parity::EXCLUDED, Baudrate::BAUD57600
 		);
 
 		rtt_target::rprintln!("Display");
@@ -225,12 +226,16 @@ const APP: () = {
 
 		let usb_preinit = usb::preinit(ctx.device.USBD, clocks);
 
-		rtt_target::rprintln!("Fingerprint Reader");
-
+		let fprx = {
 		if board_gpio.fpr_power.is_some() {
-			use nrf52840_hal::prelude::OutputPin;
-			board_gpio.fpr_power.as_mut().unwrap().set_low().ok();
-		}
+			rtt_target::rprintln!("Fingerprint Reader");
+			let fprx_ = fpr::FingerprintReader::new(uart,
+						board_gpio.fpr_power.take().unwrap(),
+						board_gpio.fpr_detect.take().unwrap());
+			Some(fprx_)
+		} else {
+			None
+		}};
 
 		rtt_target::rprintln!("Finalizing");
 
@@ -245,7 +250,7 @@ const APP: () = {
 			gpiote,
 			ui,
 			trussed_service: srv,
-			uart,
+			finger: fprx,
 			pre_usb: Some(usb_preinit),
 			power,
 			rtc,
@@ -319,27 +324,23 @@ const APP: () = {
 		ctx.resources.trussed_service.process();
 	}
 
-	#[task(priority = 1, binds = GPIOTE, resources = [ui, gpiote, uart])]
+	#[task(priority = 1, binds = GPIOTE, resources = [ui, gpiote, finger])]
 	fn irq_gpiote(ctx: irq_gpiote::Context) {
 		rtt_target::rprintln!("irq GPIO");
-		ctx.resources.ui.check_buttons();
-		ctx.resources.gpiote.reset_events();
-
-		if cfg!(feature = "board-proto1") {
-			let pkt: [u8; 11+1] = [0xef, 0x01 /* magic */,
-						0xff, 0xff, 0xff, 0xff /* device address */,
-						0x01 /* COMMAND */,
-						0x00, 0x03 /* len */,
-						0x0f /* ReadSysPara */,
-						0x00, 0x13 /* checksum */];
-			ctx.resources.uart.write(&pkt).ok();
-			let mut rpkt: [u8; 11+16] = [0u8; 27];
-			ctx.resources.uart.read(&mut rpkt).ok();
-			for i in 0..27 {
-				rtt_target::rprintln!("UART R {:x}", rpkt[i]);
-			}
+		let latch_p0: u32;
+		let latch_p1: u32;
+		unsafe {
+			let pacp = nrf52840_hal::pac::Peripherals::steal();
+			latch_p0 = pacp.P0.latch.read().bits();
+			pacp.P0.latch.write(|w| w.bits(latch_p0));
+			latch_p1 = pacp.P1.latch.read().bits();
+			pacp.P1.latch.write(|w| w.bits(latch_p1));
 		}
-
+		ctx.resources.ui.check_buttons(&[latch_p0, latch_p1]);
+		if ctx.resources.finger.as_ref().unwrap().check_detect(&[latch_p0, latch_p1]) {
+			ctx.resources.finger.as_mut().unwrap().power_up();
+		}
+		ctx.resources.gpiote.reset_events();
 	}
 
 	#[task(priority = 3, binds = USBD, resources = [usb])]
