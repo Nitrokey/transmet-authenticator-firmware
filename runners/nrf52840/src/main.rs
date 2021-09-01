@@ -294,13 +294,13 @@ const APP: () = {
 		rtt_target::rprintln!("UA");
 		//usb_dispatcher.lock(|usb_dispatcher| {
 		if usb_dispatcher.is_some() {
-			// cortex_m::peripheral::NVIC::mask(nrf52840_hal::pac::Interrupt::USBD);
+			cortex_m::peripheral::NVIC::mask(nrf52840_hal::pac::Interrupt::USBD);
 			let b = usb_dispatcher.as_mut().unwrap().poll_apps(&mut [fido_app, admin_app]);
 			if b {
 				rtt_target::rprintln!("rUSB");
 				rtic::pend(nrf52840_hal::pac::Interrupt::USBD);
 			}
-			// unsafe { cortex_m::peripheral::NVIC::unmask(nrf52840_hal::pac::Interrupt::USBD); }
+			unsafe { cortex_m::peripheral::NVIC::unmask(nrf52840_hal::pac::Interrupt::USBD); }
 		}
 		//});
 	}

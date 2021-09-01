@@ -6,6 +6,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let target = env::var("TARGET")?;
     let builder = builder
         .flag("-std=c11")
+        .flag("-fno-omit-frame-pointer")
         .flag("-DLFS_NO_MALLOC")
         .flag("-DLFS_NO_DEBUG")
         .flag("-DLFS_NO_WARN")
