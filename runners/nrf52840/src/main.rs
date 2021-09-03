@@ -37,13 +37,13 @@ mod ui;
 mod usb;
 
 /* TODO: add external flash */
-littlefs2::const_ram_storage!(ExternalStore, 1024);
-littlefs2::const_ram_storage!(VolatileStore, 8192);
+littlefs2::const_ram_storage!(ExternalRAMStore, 1024);
+littlefs2::const_ram_storage!(VolatileRAMStore, 8192);
 trussed::store!(
 	StickStore,
 	Internal: flash::FlashStorage,
-	External: ExternalStore,
-	Volatile: VolatileStore
+	External: ExternalRAMStore,
+	Volatile: VolatileRAMStore
 );
 
 trussed::platform!(
@@ -89,6 +89,7 @@ const APP: () = {
 		usb_dispatcher: Option<usb::USBDispatcher>,
 		power: nrf52840_hal::pac::POWER,
 		rtc: Rtc<nrf52840_hal::pac::RTC0>,
+		piv_app: piv_authenticator::Authenticator<TrussedClient, {apdu_dispatch::command::SIZE}>,
 		fido_app: dispatch_fido::Fido<fido_authenticator::NonSilentAuthenticator, TrussedClient>,
 		admin_app: admin_app::App<TrussedClient, NRFReboot>,
 	}
@@ -185,13 +186,11 @@ const APP: () = {
 
 		let stickstore = StickStore::init(
 			stickflash,
-			ExternalStore::new(),
-			VolatileStore::new(),
+			ExternalRAMStore::new(),
+			VolatileRAMStore::new(),
 			cfg!(feature = "reformat-flash")
 		);
-
-		// let foopath = littlefs2::path::PathBuf::from("testme/dat/rng-state.bin");
-		// trussed::store::store(stickstore, trussed::types::Location::Internal, &foopath, &[0u8; 32]).ok();
+		// let stickstore_prov = stickstore.clone();
 
 		rtt_target::rprintln!("Trussed Platform");
 
@@ -207,18 +206,7 @@ const APP: () = {
 
 		rtt_target::rprintln!("Apps");
 
-		let fido_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
-		let fido_lfs2_path = littlefs2::path::PathBuf::from("fido");
-		srv.add_endpoint(fido_trussed_xch.1, fido_lfs2_path).ok();
-		let fido_trussed_client = TrussedClient::new(fido_trussed_xch.0, NRFSyscall {});
-		let fido_auth = fido_authenticator::Authenticator::new(fido_trussed_client, fido_authenticator::NonSilentAuthenticator {});
-		let fido_app = dispatch_fido::Fido::<fido_authenticator::NonSilentAuthenticator, TrussedClient>::new(fido_auth);
-
-		let admin_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
-		let admin_lfs2_path = littlefs2::path::PathBuf::from("admin");
-		srv.add_endpoint(admin_trussed_xch.1, admin_lfs2_path).ok();
-		let admin_trussed_client = TrussedClient::new(admin_trussed_xch.0, NRFSyscall {});
-		let admin_app = admin_app::App::<TrussedClient, NRFReboot>::new(admin_trussed_client, [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15], 0x00000001);
+		let (fido_app, admin_app, piv_app) = instantiate_apps(&mut srv);
 
 		rtt_target::rprintln!("USB");
 
@@ -254,6 +242,7 @@ const APP: () = {
 			pre_usb: Some(usb_preinit),
 			power,
 			rtc,
+			piv_app,
 			fido_app,
 			admin_app
 		}
@@ -287,16 +276,16 @@ const APP: () = {
 		}
 	}
 
-	#[task(priority = 1, resources = [usb_dispatcher, fido_app, admin_app])]
+	#[task(priority = 1, resources = [usb_dispatcher, piv_app, fido_app, admin_app])]
 	fn userspace_apps(ctx: userspace_apps::Context) {
-		let userspace_apps::Resources { usb_dispatcher, fido_app, admin_app} = ctx.resources;
+		let userspace_apps::Resources { usb_dispatcher, piv_app, fido_app, admin_app} = ctx.resources;
 
 		rtt_target::rprintln!("UA");
 		//usb_dispatcher.lock(|usb_dispatcher| {
 		if usb_dispatcher.is_some() {
 			cortex_m::peripheral::NVIC::mask(nrf52840_hal::pac::Interrupt::USBD);
-			let b = usb_dispatcher.as_mut().unwrap().poll_apps(&mut [fido_app, admin_app]);
-			if b {
+			let (raise_usb, _raise_nfc) = usb_dispatcher.as_mut().unwrap().poll_apps(&mut [fido_app, admin_app], &mut [piv_app]);
+			if raise_usb {
 				rtt_target::rprintln!("rUSB");
 				rtic::pend(nrf52840_hal::pac::Interrupt::USBD);
 			}
@@ -404,3 +393,36 @@ const APP: () = {
 		fn SWI5_EGU5();
 	}
 };
+
+fn instantiate_apps(srv: &mut trussed::service::Service<StickPlatform>) ->
+	(dispatch_fido::Fido<fido_authenticator::NonSilentAuthenticator, TrussedClient>,
+	admin_app::App<TrussedClient, NRFReboot>,
+	piv_authenticator::Authenticator<TrussedClient, {apdu_dispatch::command::SIZE}>) {
+	let fido_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
+	let fido_lfs2_path = littlefs2::path::PathBuf::from("fido");
+	srv.add_endpoint(fido_trussed_xch.1, fido_lfs2_path).ok();
+	let fido_trussed_client = TrussedClient::new(fido_trussed_xch.0, NRFSyscall {});
+	let fido_auth = fido_authenticator::Authenticator::new(fido_trussed_client, fido_authenticator::NonSilentAuthenticator {});
+	let fido_app = dispatch_fido::Fido::<fido_authenticator::NonSilentAuthenticator, TrussedClient>::new(fido_auth);
+
+	let admin_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
+	let admin_lfs2_path = littlefs2::path::PathBuf::from("admin");
+	srv.add_endpoint(admin_trussed_xch.1, admin_lfs2_path).ok();
+	let admin_trussed_client = TrussedClient::new(admin_trussed_xch.0, NRFSyscall {});
+	let admin_app = admin_app::App::<TrussedClient, NRFReboot>::new(admin_trussed_client, [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15], 0x00000001);
+
+	let piv_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
+	let piv_lfs2_path = littlefs2::path::PathBuf::from("piv");
+	srv.add_endpoint(piv_trussed_xch.1, piv_lfs2_path).ok();
+	let piv_trussed_client = TrussedClient::new(piv_trussed_xch.0, NRFSyscall {});
+	let piv_app = piv_authenticator::Authenticator::<TrussedClient, {apdu_dispatch::command::SIZE}>::new(piv_trussed_client);
+/*
+	let prov_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
+	let prov_lfs2_path = littlefs2::path::PathBuf::from("pro");
+	srv.add_endpoint(prov_trussed_xch.1, prov_lfs2_path).ok();
+	let prov_trussed_client = TrussedClient::new(prov_trussed_xch.0, NRFSyscall {});
+	let prov_app = provisioner_app::Provisioner::<StickStore, flash::FlashStorage, TrussedClient>::new(prov_trussed_client, store, &mut internal_flash, false);
+*/
+
+	(fido_app, admin_app, piv_app)
+}

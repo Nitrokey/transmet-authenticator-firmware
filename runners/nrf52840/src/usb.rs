@@ -23,11 +23,13 @@ static mut USBD: Option<UsbBusAllocator<XUsbd>> = None;
 static mut USBCLK: Option<LFHFClockType> = None;
 
 pub struct USBObjects<'a> {
-	usbdevice: UsbDevice<'a, XUsbd<'a>>,
-	ctaphid_class: usbd_ctaphid::CtapHid<'a, XUsbd<'a>>,
+	usbdevice: UsbDevice<'a, XUsbd<'static>>,
+	ccid_class: usbd_ccid::Ccid<XUsbd<'static>, apdu_dispatch::interchanges::Contact, {apdu_dispatch::interchanges::SIZE}>,
+	ctaphid_class: usbd_ctaphid::CtapHid<'a, XUsbd<'static>>,
 }
 
 pub struct USBDispatcher {
+	apdu_dispatch: apdu_dispatch::dispatch::ApduDispatch,
 	ctaphid_dispatch: ctaphid_dispatch::dispatch::Dispatch,
 }
 
@@ -52,12 +54,21 @@ pub fn init(preinit: USBPreinitObjects) -> (USBObjects<'static>, USBDispatcher) 
 
 	rtt_target::rprintln!("USB: Glbl ok");
 
+	/* Class #1: CCID */
+	let (ccid_rq, ccid_rp) = apdu_dispatch::interchanges::Contact::claim().unwrap();
+	let (_nfc_rq, nfc_rp) = apdu_dispatch::interchanges::Contactless::claim().unwrap();
+	let ccid = usbd_ccid::Ccid::new(usbd_ref, ccid_rq, Some(b"PTB/EMC"));
+	let apdu_dispatch = apdu_dispatch::dispatch::ApduDispatch::new(ccid_rp, nfc_rp);
+
+	/* Class #2: CTAPHID */
 	let (ctaphid_rq, ctaphid_rp) = ctaphid_dispatch::types::HidInterchange::claim().unwrap();
 	let ctaphid = usbd_ctaphid::CtapHid::new(usbd_ref, ctaphid_rq, 0u32)
 			.implements_ctap1()
 			.implements_ctap2()
 			.implements_wink();
 	let ctaphid_dispatch = ctaphid_dispatch::dispatch::Dispatch::new(ctaphid_rp);
+
+	/* Finally: create device */
 	let usbdevice = UsbDeviceBuilder::new(usbd_ref, UsbVidPid(0x1209, 0x5090))
 			.product("EMC Stick").manufacturer("Nitrokey/PTB")
 			.serial_number("imagine-a-uuid-here")
@@ -66,22 +77,30 @@ pub fn init(preinit: USBPreinitObjects) -> (USBObjects<'static>, USBDispatcher) 
 
 	rtt_target::rprintln!("USB: Objx ok");
 
-	( USBObjects { usbdevice, ctaphid_class: ctaphid },
-		USBDispatcher { ctaphid_dispatch } )
+	( USBObjects { usbdevice, ccid_class: ccid, ctaphid_class: ctaphid },
+		USBDispatcher { apdu_dispatch, ctaphid_dispatch } )
 }
 
 impl USBObjects<'static> {
 	// Polls for activity from the host (called from the USB IRQ handler) //
 	pub fn poll(&mut self) {
+		self.ccid_class.check_for_app_response();
 		self.ctaphid_class.check_for_app_response();
-		self.usbdevice.poll(&mut [&mut self.ctaphid_class]);
+		self.usbdevice.poll(&mut [&mut self.ccid_class, &mut self.ctaphid_class]);
 	}
 }
 
 impl USBDispatcher {
 	// Polls for activity from the userspace applications (called during IDLE) //
-	pub fn poll_apps(&mut self, apps: &mut [&mut dyn ctaphid_dispatch::app::App]) -> bool {
-		self.ctaphid_dispatch.poll(apps)
+	pub fn poll_apps(&mut self, ctaphid_apps: &mut [&mut dyn ctaphid_dispatch::app::App], apdu_apps: &mut [&mut dyn apdu_dispatch::app::App<{apdu_dispatch::command::SIZE}, {apdu_dispatch::response::SIZE}>]) -> (bool, bool) {
+		let mut raise_usb = self.ctaphid_dispatch.poll(ctaphid_apps);
+		let mut raise_nfc = false;
+		match self.apdu_dispatch.poll(apdu_apps) {
+		Some(apdu_dispatch::dispatch::Interface::Contact) => { raise_usb = true; },
+		Some(apdu_dispatch::dispatch::Interface::Contactless) => { raise_nfc = true; },
+		_ => {}
+		}
+		(raise_usb, raise_nfc)
 	}
 }
 
