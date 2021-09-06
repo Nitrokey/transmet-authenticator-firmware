@@ -11,7 +11,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .flag("-DLFS_NO_DEBUG")
         .flag("-DLFS_NO_WARN")
         .flag("-DLFS_NO_ERROR")
-        .flag("-DLFS_ERR_EMBEDDED")
         .file("littlefs/lfs.c")
         .file("littlefs/lfs_util.c")
         .file("string.c")

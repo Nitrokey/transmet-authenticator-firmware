@@ -56,7 +56,7 @@ trussed::platform!(
 pub struct NRFSyscall {}
 impl trussed::platform::Syscall for NRFSyscall {
 	fn syscall(&mut self) {
-		rtt_target::rprintln!("SYS");
+		// rtt_target::rprintln!("SYS");
 		rtic::pend(nrf52840_hal::pac::Interrupt::SWI0_EGU0);
 	}
 }

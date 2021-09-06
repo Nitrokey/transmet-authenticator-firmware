@@ -13,24 +13,24 @@ impl littlefs2::driver::Storage for FlashStorage {
 	const WRITE_SIZE: usize = 4;
 	const BLOCK_COUNT: usize = FLASH_SIZE / Self::BLOCK_SIZE;
 	type CACHE_SIZE = generic_array::typenum::U256;
-	type LOOKAHEADWORDS_SIZE = generic_array::typenum::U32;
+	type LOOKAHEADWORDS_SIZE = generic_array::typenum::U1;
 
 	// the ReadNorFlash trait exposes a try_read() which (stupidly) expects a mutable self
 	// can't get those two to align - so clone the function and drop the mut there
 	fn read(&self, off: usize, buf: &mut [u8]) -> Result<usize, littlefs2::io::Error> {
-		rtt_target::rprintln!("F RD {:x} {:x}", off, buf.len());
+		// rtt_target::rprintln!("F RD {:x} {:x}", off, buf.len());
 		let res = self.nvmc.try_read_nonmut(off as u32, buf);
 		nvmc_to_lfs_return(res, buf.len())
 	}
 
 	fn write(&mut self, off: usize, buf: &[u8]) -> Result<usize, littlefs2::io::Error> {
-		rtt_target::rprintln!("F WR {:x} {:x}", off, buf.len());
+		// rtt_target::rprintln!("F WR {:x} {:x}", off, buf.len());
 		let res = self.nvmc.try_write(off as u32, buf);
 		nvmc_to_lfs_return(res, buf.len())
 	}
 
 	fn erase(&mut self, off: usize, len: usize) -> Result<usize, littlefs2::io::Error> {
-		rtt_target::rprintln!("F ER {:x} {:x}", off, len);
+		// rtt_target::rprintln!("F ER {:x} {:x}", off, len);
 		let res = self.nvmc.try_erase(off as u32, len as u32);
 		nvmc_to_lfs_return(res, len)
 	}
