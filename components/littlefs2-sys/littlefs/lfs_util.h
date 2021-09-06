@@ -48,6 +48,15 @@ extern "C"
 // macros must not have side-effects as the macros can be removed for a smaller
 // code footprint
 
+#ifdef LFS_ERR_EMBEDDED
+extern uint32_t lfs_err_loc, lfs_warn_loc, lfs_assert_loc;
+#define LFS_TRACE(...)
+#define LFS_DEBUG(...)
+#define LFS_WARN(...)		lfs_warn_loc = __LINE__;
+#define LFS_ERROR(...)		lfs_err_loc = __LINE__;
+#define LFS_ASSERT(test)	do { lfs_assert_loc = __LINE__; } while (!(test))
+#else
+
 // Logging functions
 #ifdef LFS_YES_TRACE
 #define LFS_TRACE_(fmt, ...) \
@@ -88,6 +97,7 @@ extern "C"
 #define LFS_ASSERT(test)
 #endif
 
+#endif	/* LFS_ERR_EMBEDDED */
 
 // Builtin functions, these may be replaced by more efficient
 // toolchain-specific implementations. LFS_NO_INTRINSICS falls back to a more

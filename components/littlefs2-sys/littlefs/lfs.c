@@ -31,7 +31,7 @@ static int lfs_bd_read(lfs_t *lfs,
     uint8_t *data = buffer;
     if (block >= lfs->cfg->block_count ||
             off+size > lfs->cfg->block_size) {
-        return LFS_ERR_CORRUPT;
+        LFS_WARN("corr"); return LFS_ERR_CORRUPT;
     }
 
     while (size > 0) {
@@ -159,7 +159,7 @@ static int lfs_bd_flush(lfs_t *lfs,
             }
 
             if (res != LFS_CMP_EQ) {
-                return LFS_ERR_CORRUPT;
+                LFS_WARN("corr"); return LFS_ERR_CORRUPT;
             }
         }
 
@@ -587,7 +587,7 @@ static int lfs_dir_getread(lfs_t *lfs, const lfs_mdir_t *dir,
         lfs_off_t off, void *buffer, lfs_size_t size) {
     uint8_t *data = buffer;
     if (off+size > lfs->cfg->block_size) {
-        return LFS_ERR_CORRUPT;
+        LFS_WARN("corr"); return LFS_ERR_CORRUPT;
     }
 
     while (size > 0) {
@@ -775,7 +775,7 @@ static lfs_stag_t lfs_dir_fetchmatch(lfs_t *lfs,
     // if either block address is invalid we return LFS_ERR_CORRUPT here,
     // otherwise later writes to the pair could fail
     if (pair[0] >= lfs->cfg->block_count || pair[1] >= lfs->cfg->block_count) {
-        return LFS_ERR_CORRUPT;
+        LFS_WARN("corr"); return LFS_ERR_CORRUPT;
     }
 
     // find the block with the most recent revision
@@ -996,7 +996,7 @@ static lfs_stag_t lfs_dir_fetchmatch(lfs_t *lfs,
 
     LFS_ERROR("Corrupted dir pair at {0x%"PRIx32", 0x%"PRIx32"}",
             dir->pair[0], dir->pair[1]);
-    return LFS_ERR_CORRUPT;
+    LFS_WARN("corr"); return LFS_ERR_CORRUPT;
 }
 
 static int lfs_dir_fetch(lfs_t *lfs,
@@ -1322,7 +1322,7 @@ static int lfs_dir_commitcrc(lfs_t *lfs, struct lfs_commit *commit) {
             // check against written crc, may catch blocks that
             // become readonly and match our commit size exactly
             if (i == off1 && crc != crc1) {
-                return LFS_ERR_CORRUPT;
+                LFS_WARN("corr"); return LFS_ERR_CORRUPT;
             }
 
             // leave it up to caching to make this efficient
@@ -1339,7 +1339,7 @@ static int lfs_dir_commitcrc(lfs_t *lfs, struct lfs_commit *commit) {
 
         // detected write error?
         if (crc != 0) {
-            return LFS_ERR_CORRUPT;
+            LFS_WARN("corr"); return LFS_ERR_CORRUPT;
         }
 
         // skip padding
@@ -3694,7 +3694,7 @@ int lfs_mount(lfs_t *lfs, const struct lfs_config *cfg) {
     while (!lfs_pair_isnull(dir.tail)) {
         if (cycle >= lfs->cfg->block_count/2) {
             // loop detected
-            err = LFS_ERR_CORRUPT;
+            LFS_WARN("corr"); err = LFS_ERR_CORRUPT;
             goto cleanup;
         }
         cycle += 1;
@@ -3841,7 +3841,7 @@ int lfs_fs_traverseraw(lfs_t *lfs,
     while (!lfs_pair_isnull(dir.tail)) {
         if (cycle >= lfs->cfg->block_count/2) {
             // loop detected
-            return LFS_ERR_CORRUPT;
+            LFS_ASSERT(0); return LFS_ERR_CORRUPT;
         }
         cycle += 1;
 
@@ -3932,7 +3932,7 @@ static int lfs_fs_pred(lfs_t *lfs,
     while (!lfs_pair_isnull(pdir->tail)) {
         if (cycle >= lfs->cfg->block_count/2) {
             // loop detected
-            return LFS_ERR_CORRUPT;
+            LFS_WARN("corr"); return LFS_ERR_CORRUPT;
         }
         cycle += 1;
 
@@ -3982,7 +3982,7 @@ static lfs_stag_t lfs_fs_parent(lfs_t *lfs, const lfs_block_t pair[2],
     while (!lfs_pair_isnull(parent->tail)) {
         if (cycle >= lfs->cfg->block_count/2) {
             // loop detected
-            return LFS_ERR_CORRUPT;
+            LFS_WARN("corr"); return LFS_ERR_CORRUPT;
         }
         cycle += 1;
 
@@ -4455,7 +4455,7 @@ static int lfs1_dir_fetch(lfs_t *lfs,
     if (!valid) {
         LFS_ERROR("Corrupted dir pair at {0x%"PRIx32", 0x%"PRIx32"}",
                 tpair[0], tpair[1]);
-        return LFS_ERR_CORRUPT;
+        LFS_WARN("corr"); return LFS_ERR_CORRUPT;
     }
 
     return 0;
@@ -4643,7 +4643,7 @@ static int lfs1_mount(lfs_t *lfs, struct lfs1 *lfs1,
         if (err || memcmp(superblock.d.magic, "littlefs", 8) != 0) {
             LFS_ERROR("Invalid superblock at {0x%"PRIx32", 0x%"PRIx32"}",
                     0, 1);
-            err = LFS_ERR_CORRUPT;
+            LFS_WARN("corr"); err = LFS_ERR_CORRUPT;
             goto cleanup;
         }
 

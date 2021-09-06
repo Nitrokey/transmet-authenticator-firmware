@@ -29,5 +29,10 @@ uint32_t lfs_crc(uint32_t crc, const void *buffer, size_t size) {
     return crc;
 }
 
+#ifdef LFS_ERR_EMBEDDED
+uint32_t lfs_err_loc = 0;
+uint32_t lfs_warn_loc = 0;
+uint32_t lfs_assert_loc = 0;
+#endif
 
 #endif
