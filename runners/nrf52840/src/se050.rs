@@ -37,6 +37,7 @@ pub enum T1_S_CODES {
 	IF_SOFT_RESET	= 0b1100_1111,
 }
 
+#[derive(Debug)]
 pub enum SeError {
 	PinError,
 	TransmitError(TwimError),

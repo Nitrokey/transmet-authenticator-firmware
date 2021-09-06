@@ -174,19 +174,21 @@ const APP: () = {
 		if board_gpio.se_pins.is_some() {
 			let twim1 = Twim::new(ctx.device.TWIM1, board_gpio.se_pins.take().unwrap(), nrf52840_hal::twim::Frequency::K400);
 			let mut secelem = se050::Se050::new(twim1, board_gpio.se_power.take().unwrap());
-			secelem.enable();
+			secelem.enable().expect("SE050 ERROR");
 		}
 
 		rtt_target::rprintln!("Flash");
 
-		let mut stickflash = flash::FlashStorage::new(ctx.device.NVMC, 0x000E_0000 as *mut u32, flash::FLASH_SIZE as usize);
+		let stickflash = flash::FlashStorage::new(ctx.device.NVMC, 0x000E_0000 as *mut u32, flash::FLASH_SIZE as usize);
 		/*if cfg!(feature = "reformat-flash") {
 			rtt_target::rprintln!("--> ERASING FLASH");
 			stickflash.erase(0, flash::FLASH_SIZE).ok();
 		}*/
+		/*
 		let mut chkflash: [u8; 4] = [0, 0, 0, 0];
 		stickflash.read(8, &mut chkflash);
 		rtt_target::rprintln!("Flash Read Test: {:02x} {:02x} {:02x} {:02x}", chkflash[0], chkflash[1], chkflash[2], chkflash[3]);
+		*/
 
 		rtt_target::rprintln!("Trussed Store");
 
@@ -264,6 +266,7 @@ const APP: () = {
 	}
 
 	#[task(priority = 1, resources = [ui], capacity = 4)]
+	#[inline(never)]
 	fn frontend(ctx: frontend::Context, op: FrontendOp) {
 		let frontend::Resources { ui } = ctx.resources;
 
@@ -278,6 +281,7 @@ const APP: () = {
 	}
 
 	#[task(priority = 1, resources = [usb_dispatcher, piv_app, fido_app, admin_app])]
+	#[inline(never)]
 	fn userspace_apps(ctx: userspace_apps::Context) {
 		let userspace_apps::Resources { usb_dispatcher, piv_app, fido_app, admin_app} = ctx.resources;
 
@@ -296,6 +300,7 @@ const APP: () = {
 	}
 
 	#[task(priority = 1, resources = [pre_usb, usb, usb_dispatcher])]
+	#[inline(never)]
 	fn late_setup_usb(ctx: late_setup_usb::Context) {
 		let late_setup_usb::Resources { pre_usb, mut usb, usb_dispatcher } = ctx.resources;
 
@@ -305,6 +310,17 @@ const APP: () = {
 			let ( usb_init, usb_dsp ) = usb::init(usb_preinit);
 			usb.replace(usb_init);
 			usb_dispatcher.replace(usb_dsp);
+		});
+	}
+
+	#[task(priority = 1, resources = [usb])]
+	#[inline(never)]
+	fn comm_keepalives(ctx: comm_keepalives::Context) {
+		let comm_keepalives::Resources { mut usb } = ctx.resources;
+		rtt_target::rprintln!("irq SWI5");
+
+		usb.lock(|usb| {
+			if usb.is_some() { usb.as_mut().unwrap().send_keepalives(); }
 		});
 	}
 
@@ -328,37 +344,47 @@ const APP: () = {
 		}
 		ctx.resources.ui.check_buttons(&[latch_p0, latch_p1]);
 		if ctx.resources.finger.as_ref().unwrap().check_detect(&[latch_p0, latch_p1]) {
-			ctx.resources.finger.as_mut().unwrap().power_up();
+			ctx.resources.finger.as_mut().unwrap().power_up().ok();
 		}
 		ctx.resources.gpiote.reset_events();
 	}
 
 	#[task(priority = 3, binds = USBD, resources = [usb])]
 	fn usb_handler(ctx: usb_handler::Context) {
-		let e0 = Instant::now();
-		let ev0 = usb::usbd_debug_events();
+		let usb_handler::Resources { usb } = ctx.resources;
+		// rtt_target::rprintln!("irq USB {:x}", usb::usbd_debug_events());
 
-		ctx.resources.usb.as_mut().unwrap().poll();
+		if let Some(usb_) = usb {
+			let e0 = Instant::now();
+			// let ev0 = usb::usbd_debug_events();
 
-		let ev1 = usb::usbd_debug_events();
-		let e1 = Instant::now();
-		let ed = (e1 - e0).as_cycles();
-		if ed > 64_000 {
-			rtt_target::rprintln!("!! long top half: {:x} cyc", ed);
-		}
-		if (ev0 & ev1 & 0x00e0_0401) != 0 {
-			rtt_target::rprintln!("USB screams, {:x} -> {:x}", ev0, ev1);
-		} else {
-			// rtt_target::rprintln!("irq USB {:x}", usb::usbd_debug_events());
+			usb_.poll();
+
+			// let ev1 = usb::usbd_debug_events();
+			let e1 = Instant::now();
+
+			let ed = (e1 - e0).as_cycles();
+			if ed > 64_000 {
+				rtt_target::rprintln!("!! long top half: {:x} cyc", ed);
+			}
+
+			/*if (ev0 & ev1 & 0x00e0_0401) != 0 {
+				rtt_target::rprintln!("USB screams, {:x} -> {:x}", ev0, ev1);
+			}
+			*/
+
+			usb_.send_keepalives();
 		}
 	}
 
-	#[task(priority = 4, binds = RTC0, resources = [rtc], spawn = [frontend, userspace_apps])]
+	#[task(priority = 4, binds = RTC0, resources = [rtc], spawn = [frontend, userspace_apps, comm_keepalives])]
 	fn rtc_handler(ctx: rtc_handler::Context) {
 		let rtc_count = ctx.resources.rtc.get_counter();
 		rtt_target::rprintln!("irq RTC {:x}", rtc_count);
 		ctx.resources.rtc.reset_event(RtcInterrupt::Tick);
 		let rtc_time = ctx.resources.rtc.get_counter();
+		ctx.spawn.comm_keepalives().ok();
+		// rtic::pend(nrf52840_hal::pac::Interrupt::SWI5_EGU5);
 		ctx.spawn.frontend(FrontendOp::RefreshUI(rtc_time)).ok();
 		ctx.spawn.userspace_apps().ok();
 	}
@@ -391,7 +417,7 @@ const APP: () = {
 
 	extern "C" {
 		fn SWI4_EGU4();
-		fn SWI5_EGU5();
+		// fn SWI5_EGU5();
 	}
 };
 
@@ -463,10 +489,10 @@ fn setup_store(flash: flash::FlashStorage, reformat: bool) -> StickStore {
 		reformat
 	).expect("mount failed");
 
-	rtt_target::rprintln!("test-store");
-
+	/*rtt_target::rprintln!("test-store");
 	let foopath = littlefs2::path::PathBuf::from("/trussed/dat/rng-state.bin");
 	trussed::store::store(store, trussed::types::Location::Internal, &foopath, &[0u8; 32]).expect("foo store failed");
+	*/
 
 	store
 }

@@ -90,6 +90,12 @@ impl USBObjects<'static> {
 		self.ctaphid_class.check_for_app_response();
 		self.usbdevice.poll(&mut [&mut self.ccid_class, &mut self.ctaphid_class]);
 	}
+
+	pub fn send_keepalives(&mut self) {
+		if let usbd_ctaphid::types::Status::ReceivedData(_) = self.ctaphid_class.did_start_processing() {
+			self.ctaphid_class.send_keepalive(false);
+		}
+	}
 }
 
 impl USBDispatcher {
@@ -115,6 +121,7 @@ macro_rules! bit_event {
 };
 }
 
+#[allow(dead_code)]
 pub fn usbd_debug_events() -> u32 {
 	let mut v: u32 = 0;
 	unsafe {
