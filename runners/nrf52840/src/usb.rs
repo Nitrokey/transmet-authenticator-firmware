@@ -73,7 +73,9 @@ pub fn init(preinit: USBPreinitObjects) -> (USBObjects<'static>, USBDispatcher) 
 			.product("EMC Stick").manufacturer("Nitrokey/PTB")
 			.serial_number("imagine-a-uuid-here")
 			.device_release(0x0001u16)
-			.max_packet_size_0(64).build();
+			.max_packet_size_0(64)
+			.composite_with_iads()
+			.build();
 
 	rtt_target::rprintln!("USB: Objx ok");
 

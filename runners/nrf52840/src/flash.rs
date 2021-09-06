@@ -3,7 +3,6 @@ use embedded_storage::nor_flash::{NorFlash};
 
 pub const FLASH_SIZE: usize = 0x2_0000;
 
-#[repr(align(4096))]
 pub struct FlashStorage {
 	nvmc: nrf52840_hal::nvmc::Nvmc<nrf52840_pac::NVMC>,
 }
@@ -13,7 +12,7 @@ impl littlefs2::driver::Storage for FlashStorage {
 	const READ_SIZE: usize = 4;
 	const WRITE_SIZE: usize = 4;
 	const BLOCK_COUNT: usize = FLASH_SIZE / Self::BLOCK_SIZE;
-	type CACHE_SIZE = generic_array::typenum::U4096;
+	type CACHE_SIZE = generic_array::typenum::U256;
 	type LOOKAHEADWORDS_SIZE = generic_array::typenum::U32;
 
 	// the ReadNorFlash trait exposes a try_read() which (stupidly) expects a mutable self

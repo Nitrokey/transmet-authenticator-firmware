@@ -1,15 +1,29 @@
 SERIAL_NRFDK := 683584342
 SERIAL_PROTO1 := 801035168
 
+DEVICE_IDS_PRESENT := $(shell nrfjprog -i)
+DEVICES_PRESENT := $(if $(findstring $(SERIAL_NRFDK),$(DEVICE_IDS_PRESENT)),nrfdk,)
+DEVICES_PRESENT += $(if $(findstring $(SERIAL_PROTO1),$(DEVICE_IDS_PRESENT)),proto1,)
+
+$(info Connected devices: $(DEVICES_PRESENT))
+
 OUTDIR2 := target/thumbv7em-none-eabihf
 
-.PHONY: build release debug clean update deny program
+.PHONY: build-all build-release build-debug
+.PHONY: build-nrfdk-release build-nrfdk-debug build-proto1-release build-proto1-debug
+.PHONY: clean update deny
+.PHONY: program program-nrfdk program-proto1
+.PHONY: reset reset-nrfdk reset-proto1
 
-release: build-nrfdk-release build-proto1-release
+build-release: $(patsubst %,build-%-release,$(DEVICES_PRESENT))
 
-debug: build-nrfdk-debug build-proto1-debug
+build-debug: $(patsubst %,build-%-debug,$(DEVICES_PRESENT))
 
-build: build-proto1-debug build-proto1-release build-nrfdk-debug build-nrfdk-release
+build-all: build-release build-debug
+
+program: $(patsubst %,program-%,$(DEVICES_PRESENT))
+
+reset: $(patsubst %,reset-%,$(DEVICES_PRESENT))
 
 ifeq ($(EXTRA_FEATURES),)
 FEAT := 
@@ -22,7 +36,8 @@ build-$(1)-$(2):
 	@echo "[31;1mBuilding board [$(1)] flavor [$(2)]...[37;0m"
 	rm -f $(OUTDIR2)/$(2)/runner-$(1)
 	cargo build $$(if $$(findstring release,$(2)),--release) --features board-$(1) $(FEAT) --color always 2> cargo_stderr.log; cat cargo_stderr.log
-	arm-none-eabi-nm $(OUTDIR2)/$(2)/runner | grep ' [Tt] ' | sort | c++filt > symbols-$(1)-$(2).txt
+	arm-none-eabi-nm $(OUTDIR2)/$(2)/runner | grep ' [ABbDdRrTt] ' | sort | c++filt > symbols-$(1)-$(2).txt
+	cat arm-special-symbols.txt >> symbols-$(1)-$(2).txt
 	arm-none-eabi-objcopy -O ihex $(OUTDIR2)/$(2)/runner $(OUTDIR2)/$(2)/runner-$(1).ihex
 	mv $(OUTDIR2)/$(2)/runner $(OUTDIR2)/$(2)/runner-$(1)
 	arm-none-eabi-readelf -l $(OUTDIR2)/$(2)/runner-$(1) | grep LOAD
@@ -42,6 +57,18 @@ update:
 deny:
 	cargo deny -c always check 2> deny.log
 
-program:
-	-nrfjprog -f NRF52 -s $(SERIAL_PROTO1) --sectorerase --program $(OUTDIR2)/release/runner-proto1.ihex
-	-nrfjprog -f NRF52 -s $(SERIAL_NRFDK) --sectorerase --program $(OUTDIR2)/release/runner-nrfdk.ihex
+program-proto1:
+	nrfjprog -f NRF52 -s $(SERIAL_PROTO1) --sectorerase --program $(OUTDIR2)/release/runner-proto1.ihex
+
+program-nrfdk:
+	nrfjprog -f NRF52 -s $(SERIAL_NRFDK) --sectorerase --program $(OUTDIR2)/release/runner-nrfdk.ihex
+
+reset-proto1:
+	nrfjprog -f NRF52 -s $(SERIAL_PROTO1) --chiperase --program $(OUTDIR2)/release/runner-proto1.ihex
+	nrfjprog -f NRF52 -s $(SERIAL_PROTO1) --program blank_lfs_e0000+20000.ihex
+	nrfjprog -f NRF52 -s $(SERIAL_PROTO1) --reset
+
+reset-nrfdk:
+	nrfjprog -f NRF52 -s $(SERIAL_NRFDK) --chiperase --program $(OUTDIR2)/release/runner-nrfdk.ihex
+	nrfjprog -f NRF52 -s $(SERIAL_NRFDK) --program blank_lfs_e0000+20000.ihex
+	nrfjprog -f NRF52 -s $(SERIAL_NRFDK) --reset

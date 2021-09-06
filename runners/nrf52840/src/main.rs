@@ -102,6 +102,9 @@ const APP: () = {
 		rtt_target::rtt_init_print!();
 
 		let ficr = &*ctx.device.FICR;
+		let mut device_uuid: [u8; 16] = [0u8; 16];
+		device_uuid[0..4].copy_from_slice(&ficr.deviceid[0].read().bits().to_be_bytes());
+		device_uuid[4..8].copy_from_slice(&ficr.deviceid[1].read().bits().to_be_bytes());
 		rtt_target::rprintln!("FICR DeviceID {:08x} {:08x}", ficr.deviceid[0].read().bits(), ficr.deviceid[1].read().bits());
 		rtt_target::rprintln!("FICR EncRoot  {:08x} {:08x} {:08x} {:08x}",
 			ficr.er[0].read().bits(), ficr.er[1].read().bits(),
@@ -177,19 +180,17 @@ const APP: () = {
 		rtt_target::rprintln!("Flash");
 
 		let mut stickflash = flash::FlashStorage::new(ctx.device.NVMC, 0x000E_0000 as *mut u32, flash::FLASH_SIZE as usize);
-		if cfg!(feature = "reformat-flash") {
+		/*if cfg!(feature = "reformat-flash") {
 			rtt_target::rprintln!("--> ERASING FLASH");
 			stickflash.erase(0, flash::FLASH_SIZE).ok();
-		}
+		}*/
+		let mut chkflash: [u8; 4] = [0, 0, 0, 0];
+		stickflash.read(8, &mut chkflash);
+		rtt_target::rprintln!("Flash Read Test: {:02x} {:02x} {:02x} {:02x}", chkflash[0], chkflash[1], chkflash[2], chkflash[3]);
 
 		rtt_target::rprintln!("Trussed Store");
 
-		let stickstore = StickStore::init(
-			stickflash,
-			ExternalRAMStore::new(),
-			VolatileRAMStore::new(),
-			cfg!(feature = "reformat-flash")
-		);
+		let stickstore = setup_store(stickflash, cfg!(feature = "reformat-flash"));
 		// let stickstore_prov = stickstore.clone();
 
 		rtt_target::rprintln!("Trussed Platform");
@@ -206,7 +207,7 @@ const APP: () = {
 
 		rtt_target::rprintln!("Apps");
 
-		let (fido_app, admin_app, piv_app) = instantiate_apps(&mut srv);
+		let (fido_app, admin_app, piv_app) = instantiate_apps(&mut srv, device_uuid);
 
 		rtt_target::rprintln!("USB");
 
@@ -394,7 +395,7 @@ const APP: () = {
 	}
 };
 
-fn instantiate_apps(srv: &mut trussed::service::Service<StickPlatform>) ->
+fn instantiate_apps(srv: &mut trussed::service::Service<StickPlatform>, device_uuid: [u8; 16]) ->
 	(dispatch_fido::Fido<fido_authenticator::NonSilentAuthenticator, TrussedClient>,
 	admin_app::App<TrussedClient, NRFReboot>,
 	piv_authenticator::Authenticator<TrussedClient, {apdu_dispatch::command::SIZE}>) {
@@ -409,7 +410,7 @@ fn instantiate_apps(srv: &mut trussed::service::Service<StickPlatform>) ->
 	let admin_lfs2_path = littlefs2::path::PathBuf::from("admin");
 	srv.add_endpoint(admin_trussed_xch.1, admin_lfs2_path).ok();
 	let admin_trussed_client = TrussedClient::new(admin_trussed_xch.0, NRFSyscall {});
-	let admin_app = admin_app::App::<TrussedClient, NRFReboot>::new(admin_trussed_client, [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15], 0x00000001);
+	let admin_app = admin_app::App::<TrussedClient, NRFReboot>::new(admin_trussed_client, device_uuid, 0x00000001);
 
 	let piv_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
 	let piv_lfs2_path = littlefs2::path::PathBuf::from("piv");
@@ -425,4 +426,47 @@ fn instantiate_apps(srv: &mut trussed::service::Service<StickPlatform>) ->
 */
 
 	(fido_app, admin_app, piv_app)
+}
+
+fn setup_store(flash: flash::FlashStorage, reformat: bool) -> StickStore {
+	static mut INTERNAL_STORAGE: Option<flash::FlashStorage> = None;
+	static mut INTERNAL_FS_ALLOC: Option<littlefs2::fs::Allocation<flash::FlashStorage>> = None;
+	static mut EXTERNAL_STORAGE: Option<ExternalRAMStore> = None;
+	static mut EXTERNAL_FS_ALLOC: Option<littlefs2::fs::Allocation<ExternalRAMStore>> = None;
+	static mut VOLATILE_STORAGE: Option<VolatileRAMStore> = None;
+	static mut VOLATILE_FS_ALLOC: Option<littlefs2::fs::Allocation<VolatileRAMStore>> = None;
+
+	unsafe {
+		INTERNAL_STORAGE.replace(flash);
+		INTERNAL_FS_ALLOC = Some(littlefs2::fs::Filesystem::allocate());
+		EXTERNAL_STORAGE.replace(ExternalRAMStore::new());
+		EXTERNAL_FS_ALLOC = Some(littlefs2::fs::Filesystem::allocate());
+		VOLATILE_STORAGE.replace(VolatileRAMStore::new());
+		VOLATILE_FS_ALLOC = Some(littlefs2::fs::Filesystem::allocate());
+	}
+
+	let store = StickStore::claim().unwrap();
+
+	if reformat {
+		rtt_target::rprintln!("mount+format");
+	} else {
+		rtt_target::rprintln!("mount");
+	}
+
+	store.mount(
+		unsafe { INTERNAL_FS_ALLOC.as_mut().unwrap() },
+		unsafe { INTERNAL_STORAGE.as_mut().unwrap() },
+		unsafe { EXTERNAL_FS_ALLOC.as_mut().unwrap() },
+		unsafe { EXTERNAL_STORAGE.as_mut().unwrap() },
+		unsafe { VOLATILE_FS_ALLOC.as_mut().unwrap() },
+		unsafe { VOLATILE_STORAGE.as_mut().unwrap() },
+		reformat
+	).expect("mount failed");
+
+	rtt_target::rprintln!("test-store");
+
+	let foopath = littlefs2::path::PathBuf::from("/trussed/dat/rng-state.bin");
+	trussed::store::store(store, trussed::types::Location::Internal, &foopath, &[0u8; 32]).expect("foo store failed");
+
+	store
 }
