@@ -59,9 +59,11 @@ deny:
 
 program-proto1:
 	nrfjprog -f NRF52 -s $(SERIAL_PROTO1) --sectorerase --program $(OUTDIR2)/release/runner-proto1.ihex
+	nrfjprog -f NRF52 -s $(SERIAL_PROTO1) --reset
 
 program-nrfdk:
 	nrfjprog -f NRF52 -s $(SERIAL_NRFDK) --sectorerase --program $(OUTDIR2)/release/runner-nrfdk.ihex
+	nrfjprog -f NRF52 -s $(SERIAL_NRFDK) --reset
 
 reset-proto1:
 	nrfjprog -f NRF52 -s $(SERIAL_PROTO1) --chiperase --program $(OUTDIR2)/release/runner-proto1.ihex

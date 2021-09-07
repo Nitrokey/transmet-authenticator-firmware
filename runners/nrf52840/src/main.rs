@@ -285,7 +285,6 @@ const APP: () = {
 	fn userspace_apps(ctx: userspace_apps::Context) {
 		let userspace_apps::Resources { usb_dispatcher, piv_app, fido_app, admin_app} = ctx.resources;
 
-		rtt_target::rprintln!("UA");
 		//usb_dispatcher.lock(|usb_dispatcher| {
 		if usb_dispatcher.is_some() {
 			cortex_m::peripheral::NVIC::mask(nrf52840_hal::pac::Interrupt::USBD);
@@ -317,7 +316,6 @@ const APP: () = {
 	#[inline(never)]
 	fn comm_keepalives(ctx: comm_keepalives::Context) {
 		let comm_keepalives::Resources { mut usb } = ctx.resources;
-		rtt_target::rprintln!("irq SWI5");
 
 		usb.lock(|usb| {
 			if usb.is_some() { usb.as_mut().unwrap().send_keepalives(); }
@@ -382,10 +380,11 @@ const APP: () = {
 		let rtc_count = ctx.resources.rtc.get_counter();
 		rtt_target::rprintln!("irq RTC {:x}", rtc_count);
 		ctx.resources.rtc.reset_event(RtcInterrupt::Tick);
-		let rtc_time = ctx.resources.rtc.get_counter();
-		ctx.spawn.comm_keepalives().ok();
-		// rtic::pend(nrf52840_hal::pac::Interrupt::SWI5_EGU5);
-		ctx.spawn.frontend(FrontendOp::RefreshUI(rtc_time)).ok();
+		if (rtc_count % 2) == 0 {
+			ctx.spawn.comm_keepalives().ok();
+			// rtic::pend(nrf52840_hal::pac::Interrupt::SWI5_EGU5);
+		}
+		ctx.spawn.frontend(FrontendOp::RefreshUI(rtc_count)).ok();
 		ctx.spawn.userspace_apps().ok();
 	}
 
@@ -436,7 +435,7 @@ fn instantiate_apps(srv: &mut trussed::service::Service<StickPlatform>, device_u
 	let admin_lfs2_path = littlefs2::path::PathBuf::from("admin");
 	srv.add_endpoint(admin_trussed_xch.1, admin_lfs2_path).ok();
 	let admin_trussed_client = TrussedClient::new(admin_trussed_xch.0, NRFSyscall {});
-	let admin_app = admin_app::App::<TrussedClient, NRFReboot>::new(admin_trussed_client, device_uuid, 0x00000001);
+	let admin_app = admin_app::App::<TrussedClient, NRFReboot>::new(admin_trussed_client, device_uuid, 0x10203040);
 
 	let piv_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
 	let piv_lfs2_path = littlefs2::path::PathBuf::from("piv");

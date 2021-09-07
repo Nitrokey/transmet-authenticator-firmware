@@ -1,3 +1,5 @@
 /symbols*.txt
 data/*.bmp
 data/*.raw
+deployment/fs.*
+deployment/my
