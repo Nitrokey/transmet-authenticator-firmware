@@ -68,7 +68,7 @@ impl admin_app::Reboot for NRFReboot {
 	fn reboot_to_firmware_update_destructive() -> ! { todo!() }
 }
 
-type TrussedClient = trussed::ClientImplementation<NRFSyscall>;
+type TrussedNRFClient = trussed::ClientImplementation<NRFSyscall>;
 
 enum FrontendOp {
 	RefreshUI(u32),
@@ -89,9 +89,9 @@ const APP: () = {
 		usb_dispatcher: Option<usb::USBDispatcher>,
 		power: nrf52840_hal::pac::POWER,
 		rtc: Rtc<nrf52840_hal::pac::RTC0>,
-		piv_app: piv_authenticator::Authenticator<TrussedClient, {apdu_dispatch::command::SIZE}>,
-		fido_app: dispatch_fido::Fido<fido_authenticator::NonSilentAuthenticator, TrussedClient>,
-		admin_app: admin_app::App<TrussedClient, NRFReboot>,
+		piv_app: piv_authenticator::Authenticator<TrussedNRFClient, {apdu_dispatch::command::SIZE}>,
+		fido_app: dispatch_fido::Fido<fido_authenticator::NonSilentAuthenticator, TrussedNRFClient>,
+		admin_app: admin_app::App<TrussedNRFClient, NRFReboot>,
 	}
 
 	#[init(spawn = [frontend])]
@@ -324,7 +324,7 @@ const APP: () = {
 
 	#[task(priority = 2, binds = SWI0_EGU0, resources = [trussed_service])]
 	fn irq_trussed(ctx: irq_trussed::Context) {
-		rtt_target::rprintln!("irq SYS");
+		// rtt_target::rprintln!("irq SYS");
 		ctx.resources.trussed_service.process();
 	}
 
@@ -421,33 +421,33 @@ const APP: () = {
 };
 
 fn instantiate_apps(srv: &mut trussed::service::Service<StickPlatform>, device_uuid: [u8; 16]) ->
-	(dispatch_fido::Fido<fido_authenticator::NonSilentAuthenticator, TrussedClient>,
-	admin_app::App<TrussedClient, NRFReboot>,
-	piv_authenticator::Authenticator<TrussedClient, {apdu_dispatch::command::SIZE}>) {
+	(dispatch_fido::Fido<fido_authenticator::NonSilentAuthenticator, TrussedNRFClient>,
+	admin_app::App<TrussedNRFClient, NRFReboot>,
+	piv_authenticator::Authenticator<TrussedNRFClient, {apdu_dispatch::command::SIZE}>) {
 	let fido_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
 	let fido_lfs2_path = littlefs2::path::PathBuf::from("fido");
 	srv.add_endpoint(fido_trussed_xch.1, fido_lfs2_path).ok();
-	let fido_trussed_client = TrussedClient::new(fido_trussed_xch.0, NRFSyscall {});
+	let fido_trussed_client = TrussedNRFClient::new(fido_trussed_xch.0, NRFSyscall {});
 	let fido_auth = fido_authenticator::Authenticator::new(fido_trussed_client, fido_authenticator::NonSilentAuthenticator {});
-	let fido_app = dispatch_fido::Fido::<fido_authenticator::NonSilentAuthenticator, TrussedClient>::new(fido_auth);
+	let fido_app = dispatch_fido::Fido::<fido_authenticator::NonSilentAuthenticator, TrussedNRFClient>::new(fido_auth);
 
 	let admin_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
 	let admin_lfs2_path = littlefs2::path::PathBuf::from("admin");
 	srv.add_endpoint(admin_trussed_xch.1, admin_lfs2_path).ok();
-	let admin_trussed_client = TrussedClient::new(admin_trussed_xch.0, NRFSyscall {});
-	let admin_app = admin_app::App::<TrussedClient, NRFReboot>::new(admin_trussed_client, device_uuid, 0x10203040);
+	let admin_trussed_client = TrussedNRFClient::new(admin_trussed_xch.0, NRFSyscall {});
+	let admin_app = admin_app::App::<TrussedNRFClient, NRFReboot>::new(admin_trussed_client, device_uuid, 0x10203040);
 
 	let piv_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
 	let piv_lfs2_path = littlefs2::path::PathBuf::from("piv");
 	srv.add_endpoint(piv_trussed_xch.1, piv_lfs2_path).ok();
-	let piv_trussed_client = TrussedClient::new(piv_trussed_xch.0, NRFSyscall {});
-	let piv_app = piv_authenticator::Authenticator::<TrussedClient, {apdu_dispatch::command::SIZE}>::new(piv_trussed_client);
+	let piv_trussed_client = TrussedNRFClient::new(piv_trussed_xch.0, NRFSyscall {});
+	let piv_app = piv_authenticator::Authenticator::<TrussedNRFClient, {apdu_dispatch::command::SIZE}>::new(piv_trussed_client);
 /*
 	let prov_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
 	let prov_lfs2_path = littlefs2::path::PathBuf::from("pro");
 	srv.add_endpoint(prov_trussed_xch.1, prov_lfs2_path).ok();
-	let prov_trussed_client = TrussedClient::new(prov_trussed_xch.0, NRFSyscall {});
-	let prov_app = provisioner_app::Provisioner::<StickStore, flash::FlashStorage, TrussedClient>::new(prov_trussed_client, store, &mut internal_flash, false);
+	let prov_trussed_client = TrussedNRFClient::new(prov_trussed_xch.0, NRFSyscall {});
+	let prov_app = provisioner_app::Provisioner::<StickStore, flash::FlashStorage, TrussedNRFClient>::new(prov_trussed_client, store, &mut internal_flash, false);
 */
 
 	(fido_app, admin_app, piv_app)

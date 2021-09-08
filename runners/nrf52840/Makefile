@@ -67,10 +67,18 @@ program-nrfdk:
 
 reset-proto1:
 	nrfjprog -f NRF52 -s $(SERIAL_PROTO1) --chiperase --program $(OUTDIR2)/release/runner-proto1.ihex
-	nrfjprog -f NRF52 -s $(SERIAL_PROTO1) --program blank_lfs_e0000+20000.ihex
+	nrfjprog -f NRF52 -s $(SERIAL_PROTO1) --program fidokeys_lfs_e0000+20000.ihex
 	nrfjprog -f NRF52 -s $(SERIAL_PROTO1) --reset
 
 reset-nrfdk:
 	nrfjprog -f NRF52 -s $(SERIAL_NRFDK) --chiperase --program $(OUTDIR2)/release/runner-nrfdk.ihex
-	nrfjprog -f NRF52 -s $(SERIAL_NRFDK) --program blank_lfs_e0000+20000.ihex
+	nrfjprog -f NRF52 -s $(SERIAL_NRFDK) --program fidokeys_lfs_e0000+20000.ihex
 	nrfjprog -f NRF52 -s $(SERIAL_NRFDK) --reset
+
+flashdump:
+	rm -f flashdump_text.raw flashdump_lfs2.raw flashtmp.raw flashtmp.hex
+	nrfjprog -f NRF52 --readcode flashtmp.hex
+	arm-none-eabi-objcopy -I ihex -O binary --adjust-vma 0 flashtmp.hex flashtmp.raw
+	dd status=none bs=4096 skip=0 count=$$(( 0xe0 )) if=flashtmp.raw of=flashdump_text.raw
+	dd status=none bs=4096 skip=$$(( 0xe0 )) count=$$(( 0x20 )) if=flashtmp.raw of=flashdump_lfs2.raw
+	rm -f flashtmp.raw flashtmp.hex
