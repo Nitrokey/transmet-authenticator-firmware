@@ -57,6 +57,7 @@ where UP: UserPresence,
         Ok(())
     }
 
+    #[inline(never)]
     fn call_authenticator(&mut self, request: &AuthenticatorRequest, reply: &mut response::Data) -> app::Result {
 
         let result = self.authenticator.call(request);
@@ -176,6 +177,7 @@ where UP: UserPresence,
 
     fn deselect(&mut self) {}
 
+    #[inline(never)]
     fn call(&mut self, _type: app::Interface, apdu: &Command, reply: &mut response::Data) -> app::Result {
         let instruction = apdu.instruction();
 

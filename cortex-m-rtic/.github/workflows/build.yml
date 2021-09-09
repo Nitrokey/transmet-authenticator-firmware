@@ -1,0 +1,773 @@
+name: Build
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - staging
+      - trying
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Run cargo fmt --check, includes macros/
+  style:
+    name: style
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v1
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+          components: rustfmt
+
+      - name: cargo fmt --check
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
+
+  # Compilation check
+  check:
+    name: check
+    runs-on: ubuntu-20.04
+    strategy:
+      matrix:
+        target:
+          - thumbv7m-none-eabi
+          - thumbv6m-none-eabi
+          - x86_64-unknown-linux-gnu
+        toolchain:
+          - stable
+          - 1.38.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v2
+        with:
+          path: |
+            - ~/.cargo/bin/
+            - ~/.cargo/registry/index/
+            - ~/.cargo/registry/cache/
+            - ~/.cargo/git/db/
+          key: ${{ runner.OS }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.OS }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+            ${{ runner.OS }}-cargo-
+
+      - name: Cache build output dependencies
+        uses: actions/cache@v2
+        with:
+          path: target
+          key: ${{ runner.OS }}-build-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.OS }}-build-${{ hashFiles('**/Cargo.lock') }}
+            ${{ runner.OS }}-build-
+
+      - name: Cache Rust toolchain
+        uses: actions/cache@v2
+        with:
+          path: /usr/share/rust/
+          key: ${{ runner.OS }}-rust-${{ env.rustc_hash }}
+          restore-keys: |
+            ${{ runner.OS }}-rust-${{ env.rustc_hash }}
+
+      - name: Install Rust ${{ matrix.toolchain }} with target (${{ matrix.target }})
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          target: ${{ matrix.target }}
+          override: true
+
+      - name: Disable optimisation profiles
+        if: matrix.toolchain == '1.38.0'
+        run: sed -i '/^\[profile.*build-override]$/,/^$/{/^#/!{/^$/!d}}' Cargo.toml
+
+      - name: cargo check
+        uses: actions-rs/cargo@v1
+        with:
+          use-cross: false
+          command: check
+          args: --target=${{ matrix.target }}
+
+  # Verify all examples
+  checkexamples:
+    name: checkexamples
+    runs-on: ubuntu-20.04
+    strategy:
+      matrix:
+        target:
+          - thumbv7m-none-eabi
+          - thumbv6m-none-eabi
+        toolchain:
+          - stable
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v2
+        with:
+          path: |
+            - ~/.cargo/bin/
+            - ~/.cargo/registry/index/
+            - ~/.cargo/registry/cache/
+            - ~/.cargo/git/db/
+          key: ${{ runner.OS }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.OS }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+            ${{ runner.OS }}-cargo-
+
+      - name: Cache build output dependencies
+        uses: actions/cache@v2
+        with:
+          path: target
+          key: ${{ runner.OS }}-build-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.OS }}-build-${{ hashFiles('**/Cargo.lock') }}
+            ${{ runner.OS }}-build-
+
+      - name: Cache Rust toolchain
+        uses: actions/cache@v2
+        with:
+          path: /usr/share/rust/
+          key: ${{ runner.OS }}-rust-${{ env.rustc_hash }}
+          restore-keys: |
+            ${{ runner.OS }}-rust-${{ env.rustc_hash }}
+
+      - name: Install Rust ${{ matrix.toolchain }} with target (${{ matrix.target }})
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          target: ${{ matrix.target }}
+          override: true
+          components: llvm-tools-preview
+      - uses: actions-rs/cargo@v1
+        with:
+          use-cross: false
+          command: check
+          args: --examples --target=${{ matrix.target }} --features __min_r1_43
+
+      - name: cargo check -p homogeneous
+        uses: actions-rs/cargo@v1
+        with:
+          use-cross: false
+          command: check
+          args: -p homogeneous --examples --target=${{ matrix.target }}
+
+      # Use precompiled binutils
+      - name: cargo install cargo-binutils
+        uses: actions-rs/install@v0.1
+        with:
+          crate: cargo-binutils
+          version: latest
+          use-tool-cache: true
+
+      - name: Install QEMU
+        run: |
+          sudo apt update
+          sudo apt install -y qemu-system-arm
+
+      - name: Run-pass tests
+        run: |
+          # Print the path
+          echo $PATH
+
+          arm_example() {
+              local COMMAND=$1
+              local EXAMPLE=$2
+              local BUILD_MODE=$3
+              local FEATURES=$4
+              local BUILD_NUM=$5
+
+              if [ $BUILD_MODE = "release" ]; then
+                  local RELEASE_FLAG="--release"
+              else
+                  local RELEASE_FLAG=""
+              fi
+
+              if [ -n "$FEATURES" ]; then
+                  local FEATURES_FLAG="--features $FEATURES"
+                  local FEATURES_STR=${FEATURES/,/_}_
+              else
+                  local FEATURES_FLAG=""
+                  local FEATURES_STR=""
+              fi
+              local CARGO_FLAGS="--example $EXAMPLE --target ${{ matrix.target }} $RELEASE_FLAG $FEATURES_FLAG"
+
+              if [ $COMMAND = "run" ]; then
+                  cargo $COMMAND $CARGO_FLAGS | diff -u ci/expected/$EXAMPLE.run -
+              else
+                  cargo $COMMAND $CARGO_FLAGS
+              fi
+              cargo objcopy $CARGO_FLAGS  -- -O ihex ci/builds/${EXAMPLE}_${FEATURES_STR}${BUILD_MODE}_${BUILD_NUM}.hex
+          }
+
+          mkdir -p ci/builds
+          exs=(
+              idle
+              init
+              hardware
+              preempt
+              binds
+
+              resource
+              lock
+              late
+              only-shared-access
+
+              task
+              message
+              capacity
+
+              types
+              not-send
+              not-sync
+              shared-with-init
+
+              generics
+              cfg
+              pool
+              ramfunc
+
+              peripherals-taken
+          )
+
+          for ex in ${exs[@]}; do
+              if [ $ex = pool ]; then
+                  if [ ${{ matrix.target }} = thumbv6m-none-eabi ]; then
+                      continue
+                  fi
+
+                  td=$(mktemp -d)
+
+                  cargo run --example $ex --target ${{ matrix.target }} --features __v7 >\
+                          $td/pool.run
+                  grep 'foo(0x2' $td/pool.run
+                  grep 'bar(0x2' $td/pool.run
+                  cargo objcopy --example $ex --target ${{ matrix.target }} --features __v7 -- -O ihex ci/builds/${ex}___v7_debug_1.hex
+
+                  cargo run --example $ex --target ${{ matrix.target }} --features __v7 --release >\
+                          $td/pool.run
+                  grep 'foo(0x2' $td/pool.run
+                  grep 'bar(0x2' $td/pool.run
+                  cargo objcopy --example $ex --target ${{ matrix.target }} --features __v7 --release -- -O ihex ci/builds/${ex}___v7_release_1.hex
+
+                  rm -rf $td
+
+                  continue
+              fi
+
+              if [ $ex = types ]; then
+                  if [ ${{ matrix.target }} = thumbv6m-none-eabi ]; then
+                      continue
+                  fi
+
+                  arm_example "run" $ex "debug" "__v7" "1"
+                  arm_example "run" $ex "release" "__v7" "1"
+
+                  continue
+              fi
+
+              arm_example "run" $ex "debug" "" "1"
+              if [ $ex = types ]; then
+                  arm_example "run" $ex "release" "" "1"
+              else
+                  arm_example "build" $ex "release" "" "1"
+              fi
+          done
+
+          built=()
+          cargo clean
+          for ex in ${exs[@]}; do
+              if [ $ex = types ] || [ $ex = pool ]; then
+                  if [ ${{ matrix.target }} = thumbv6m-none-eabi ]; then
+                      continue
+                  fi
+
+                  arm_example "build" $ex "debug" "__v7" "2"
+                  cmp ci/builds/${ex}___v7_debug_1.hex \
+                      ci/builds/${ex}___v7_debug_2.hex
+                  arm_example "build" $ex "release" "__v7" "2"
+                  cmp ci/builds/${ex}___v7_release_1.hex \
+                      ci/builds/${ex}___v7_release_2.hex
+              else
+                  arm_example "build" $ex "debug" "" "2"
+                  cmp ci/builds/${ex}_debug_1.hex \
+                      ci/builds/${ex}_debug_2.hex
+                  arm_example "build" $ex "release" "" "2"
+                  cmp ci/builds/${ex}_release_1.hex \
+                      ci/builds/${ex}_release_2.hex
+              fi
+
+              built+=( $ex )
+          done
+
+          ( cd target/${{ matrix.target }}/release/examples/ && size ${built[@]} )
+
+
+  # Check the correctness of macros/ crate
+  checkmacros:
+    name: checkmacros
+    runs-on: ubuntu-20.04
+    strategy:
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+        toolchain:
+          - stable
+          - 1.38.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v2
+        with:
+          path: |
+            - ~/.cargo/bin/
+            - ~/.cargo/registry/index/
+            - ~/.cargo/registry/cache/
+            - ~/.cargo/git/db/
+          key: ${{ runner.OS }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.OS }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+            ${{ runner.OS }}-cargo-
+
+      - name: Cache build output dependencies
+        uses: actions/cache@v2
+        with:
+          path: target
+          key: ${{ runner.OS }}-build-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.OS }}-build-${{ hashFiles('**/Cargo.lock') }}
+            ${{ runner.OS }}-build-
+
+      - name: Cache Rust toolchain
+        uses: actions/cache@v2
+        with:
+          path: /usr/share/rust/
+          key: ${{ runner.OS }}-rust-${{ env.rustc_hash }}
+          restore-keys: |
+            ${{ runner.OS }}-rust-${{ env.rustc_hash }}
+
+      - name: Install Rust ${{ matrix.toolchain }} with target (${{ matrix.target }})
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          target: ${{ matrix.target }}
+          override: true
+
+      - name: Disable optimisation profiles
+        if: matrix.toolchain == '1.38.0'
+        run: sed -i '/^\[profile.*build-override]$/,/^$/{/^#/!{/^$/!d}}' Cargo.toml
+
+      - name: cargo check
+        uses: actions-rs/cargo@v1
+        with:
+          use-cross: false
+          command: check
+          args: --manifest-path macros/Cargo.toml --target=${{ matrix.target }}
+
+  # Run test suite for thumbv7m
+  testv7:
+    name: testv7
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v2
+        with:
+          path: |
+            - ~/.cargo/bin/
+            - ~/.cargo/registry/index/
+            - ~/.cargo/registry/cache/
+            - ~/.cargo/git/db/
+          key: ${{ runner.OS }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.OS }}-cargo-
+
+      - name: Cache build output dependencies
+        uses: actions/cache@v2
+        with:
+          path: target
+          key: ${{ runner.OS }}-build-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.OS }}-build-
+
+      - name: Cache Rust toolchain
+        uses: actions/cache@v2
+        with:
+          path: /usr/share/rust/
+          key: ${{ runner.OS }}-rust-${{ env.rustc_hash }}
+          restore-keys: |
+            ${{ runner.OS }}-rust-${{ env.rustc_hash }}
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: 1.38.0
+          target: thumbv7m-none-eabi
+          override: true
+
+      - name: Disable optimisation profiles
+        run: sed -i '/^\[profile.*build-override]$/,/^$/{/^#/!{/^$/!d}}' Cargo.toml
+
+      - uses: actions-rs/cargo@v1
+        with:
+          use-cross: false
+          command: test
+          args: --test single --features __v7
+
+  # Run test suite for thumbv6m
+  testv6:
+    name: testv6
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v2
+        with:
+          path: |
+            - ~/.cargo/bin/
+            - ~/.cargo/registry/index/
+            - ~/.cargo/registry/cache/
+            - ~/.cargo/git/db/
+          key: ${{ runner.OS }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.OS }}-cargo-
+
+      - name: Cache build output dependencies
+        uses: actions/cache@v2
+        with:
+          path: target
+          key: ${{ runner.OS }}-build-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.OS }}-build-
+
+      - name: Cache Rust toolchain
+        uses: actions/cache@v2
+        with:
+          path: /usr/share/rust/
+          key: ${{ runner.OS }}-rust-${{ env.rustc_hash }}
+          restore-keys: |
+            ${{ runner.OS }}-rust-${{ env.rustc_hash }}
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: 1.38.0
+          target: thumbv6m-none-eabi
+          override: true
+
+      - name: Disable optimisation profiles
+        run: sed -i '/^\[profile.*build-override]$/,/^$/{/^#/!{/^$/!d}}' Cargo.toml
+
+      - uses: actions-rs/cargo@v1
+        with:
+          use-cross: false
+          command: test
+          args: --test single
+
+  # Verify all multicore examples
+  checkmulticore:
+    name: checkmulticore
+    runs-on: ubuntu-20.04
+    strategy:
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+        toolchain:
+          - nightly
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Install Rust ${{ matrix.toolchain }} with x86_64-unknown-linux-gnu
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          target: x86_64-unknown-linux-gnu
+          override: true
+      - name: Install Rust ${{ matrix.toolchain }} with thumbv7m-none-eabi
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          target: thumbv7m-none-eabi
+          override: true
+      - name: Install Rust ${{ matrix.toolchain }} with thumbv6m-none-eabi
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          target: thumbv6m-none-eabi
+          override: true
+      - uses: actions-rs/cargo@v1
+        with:
+          command: install
+          args: microamp-tools --version 0.1.0-alpha.3
+
+      - name: Check multi-core examples
+        run: |
+          cd heterogeneous
+          exs=(
+              smallest
+              x-init-2
+              x-init
+              x-schedule
+              x-spawn
+          )
+          for ex in ${exs[@]}; do
+              cargo-microamp --example=$ex --target thumbv7m-none-eabi,thumbv6m-none-eabi --check
+          done
+
+  # Build documentation, check links
+  docs:
+    name: docs
+    runs-on: ubuntu-20.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v2
+        with:
+          path: |
+            - ~/.cargo/bin/
+            - ~/.cargo/registry/index/
+            - ~/.cargo/registry/cache/
+            - ~/.cargo/git/db/
+          key: ${{ runner.OS }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.OS }}-cargo-
+
+      - name: Cache build output dependencies
+        uses: actions/cache@v2
+        with:
+          path: target
+          key: ${{ runner.OS }}-build-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.OS }}-build-
+
+      - name: Cache Rust toolchain
+        uses: actions/cache@v2
+        with:
+          path: /usr/share/rust/
+          key: ${{ runner.OS }}-rust-${{ env.rustc_hash }}
+          restore-keys: |
+            ${{ runner.OS }}-rust-${{ env.rustc_hash }}
+
+      - name: Cache pip installed linkchecker
+        uses: actions/cache@v2
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Set up Python 3.x
+        uses: actions/setup-python@v2
+        with:
+        # Semantic version range syntax or exact version of a Python version
+          python-version: '3.x'
+          # Optional - x64 or x86 architecture, defaults to x64
+          architecture: 'x64'
+
+      # You can test your matrix by printing the current Python version
+      - name: Display Python version
+        run: python -c "import sys; print(sys.version)"
+
+      - name: Install dependencies
+        run: pip install git+https://github.com/linkchecker/linkchecker.git
+
+      - name: Remove cargo-config
+        run: rm -f .cargo/config
+
+      - name: Build docs
+        run: cargo doc
+
+      - name: Check links
+        run: |
+          td=$(mktemp -d)
+          cp -r target/doc $td/api
+          linkchecker $td/api/rtic/
+          linkchecker $td/api/cortex_m_rtic_macros/
+
+  # Build the books
+  mdbook:
+    name: mdbook
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Set up Python 3.x
+        uses: actions/setup-python@v2
+        with:
+        # Semantic version range syntax or exact version of a Python version
+          python-version: '3.x'
+          # Optional - x64 or x86 architecture, defaults to x64
+          architecture: 'x64'
+
+      # You can test your matrix by printing the current Python version
+      - name: Display Python version
+        run: python -c "import sys; print(sys.version)"
+
+      - name: Install dependencies
+        run: pip install git+https://github.com/linkchecker/linkchecker.git
+
+      - name: mdBook Action
+        uses: peaceiris/actions-mdbook@v1
+        with:
+          mdbook-version: 'latest'
+
+      - name: Build book in English
+        run: cd book/en && mdbook build
+
+      - name: Build book in Russian
+        run: cd book/ru && mdbook build
+
+      - name: Check links
+        run: |
+          td=$(mktemp -d)
+          mkdir $td/book
+          cp -r book/en/book $td/book/en
+          cp -r book/ru/book $td/book/ru
+          cp LICENSE-* $td/book/en
+          cp LICENSE-* $td/book/ru
+
+          linkchecker $td/book/en/
+          linkchecker $td/book/ru/
+
+  # Only runs when pushing to master branch
+  deploy:
+    name: deploy
+    runs-on: ubuntu-20.04
+    needs:
+      - style
+      - check
+      - checkexamples
+      - checkmacros
+      - testv7
+      - testv6
+      - checkmulticore
+      - docs
+      - mdbook
+    # Only run this when pushing to master branch
+    if: github.ref == 'refs/heads/master'
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Set up Python 3.x
+        uses: actions/setup-python@v2
+        with:
+        # Semantic version range syntax or exact version of a Python version
+          python-version: '3.x'
+          # Optional - x64 or x86 architecture, defaults to x64
+          architecture: 'x64'
+
+      # You can test your matrix by printing the current Python version
+      - name: Display Python version
+        run: python -c "import sys; print(sys.version)"
+
+      - name: mdBook Action
+        uses: peaceiris/actions-mdbook@v1
+        with:
+          mdbook-version: 'latest'
+
+      - name: Remove cargo-config
+        run: rm -f .cargo/config
+
+      - name: Build docs
+        run: cargo doc
+
+      - name: Build books
+        run: |
+          langs=( en ru )
+          latest=0.5
+          vers=( 0.4.x )
+
+          # Create directories
+          td=$(mktemp -d)
+          mkdir -p $td/$latest/book/
+          cp -r target/doc $td/$latest/api
+
+          # sed fixes
+          sed 's|URL|rtic/index.html|g' redirect.html > $td/$latest/api/index.html
+          sed 's|URL|0.5|g' redirect.html > $td/index.html
+          sed 's|URL|book/en|g' redirect.html > $td/$latest/index.html
+
+          # Build books
+          for lang in ${langs[@]}; do
+              ( cd book/$lang && mdbook build )
+              cp -r book/$lang/book $td/$latest/book/$lang
+              cp LICENSE-* $td/$latest/book/$lang/
+          done
+
+          # Build older versions
+          root=$(pwd)
+          for ver in ${vers[@]}; do
+              prefix=${ver%.*}
+
+              mkdir -p $td/$prefix/book
+              src=$(mktemp -d)
+              curl -L https://github.com/rtic-rs/cortex-m-rtic/archive/v${ver}.tar.gz | tar xz --strip-components 1 -C $src
+
+              pushd $src
+              rm -f .cargo/config
+              cargo doc || cargo doc --features timer-queue
+              cp -r target/doc $td/$prefix/api
+              sed 's|URL|rtic/index.html|g' $root/redirect.html > $td/$prefix/api/index.html
+              for lang in ${langs[@]}; do
+                  ( cd book/$lang && mdbook build )
+                  cp -r book/$lang/book $td/$prefix/book/$lang
+                  cp LICENSE-* $td/$prefix/book/$lang/
+              done
+              sed 's|URL|book/en|g' $root/redirect.html > $td/$prefix/index.html
+              popd
+
+              rm -rf $src
+          done
+
+          # Forward CNAME file
+          cp CNAME $td/
+          mv $td/ bookstodeploy
+
+      - name: Deploy to GH-pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./bookstodeploy
+
+  # Refs: https://github.com/rust-lang/crater/blob/9ab6f9697c901c4a44025cf0a39b73ad5b37d198/.github/workflows/bors.yml#L125-L149
+  #
+  # ALL THE PREVIOUS JOBS NEEDS TO BE ADDED TO THE `needs` SECTION OF THIS JOB!
+
+  ci-success:
+    name: ci
+    if: github.event_name == 'push' && success()
+    needs:
+      - style
+      - check
+      - checkexamples
+      - checkmacros
+      - testv7
+      - testv6
+      - checkmulticore
+      - docs
+      - mdbook
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Mark the job as a success
+        run: exit 0

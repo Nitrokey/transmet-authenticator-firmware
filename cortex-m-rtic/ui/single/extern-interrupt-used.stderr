@@ -1,0 +1,5 @@
+error: `extern` interrupts can't be used as hardware tasks
+ --> $DIR/extern-interrupt-used.rs:5:20
+  |
+5 |     #[task(binds = UART0)]
+  |                    ^^^^^
