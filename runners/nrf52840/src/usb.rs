@@ -93,12 +93,12 @@ impl USBObjects<'static> {
 
 	pub fn send_keepalives(&mut self) {
 		if let usbd_ctaphid::types::Status::ReceivedData(_) = self.ctaphid_class.did_start_processing() {
-			rtt_target::rprintln!("KeepH");
-			self.ctaphid_class.send_keepalive(false);
+			rtt_target::rprintln!("-KeepH");
+			// self.ctaphid_class.send_keepalive(false);
 		}
 		if let usbd_ccid::types::Status::ReceivedData(_) = self.ccid_class.did_start_processing() {
-			rtt_target::rprintln!("KeepC");
-			self.ccid_class.send_wait_extension();
+			rtt_target::rprintln!("-KeepC");
+			// self.ccid_class.send_wait_extension();
 		}
 	}
 }
