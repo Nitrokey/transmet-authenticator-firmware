@@ -2,4 +2,7 @@
 data/*.bmp
 data/*.raw
 deployment/fs.*
-deployment/my
+deployment/list_fs
+deployment/gen_init_fs
+/flashdump*.raw
+/deny.log

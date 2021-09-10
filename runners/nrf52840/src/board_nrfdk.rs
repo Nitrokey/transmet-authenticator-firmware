@@ -71,6 +71,8 @@ pub fn init_gpio(gpiote: &Gpiote, gpio_p0: p0::Parts, gpio_p1: p1::Parts) -> Boa
         let flashnfc_spi_clk = gpio_p0.p0_19.into_push_pull_output(Level::Low).degrade();
         let flashnfc_spi_mosi = gpio_p0.p0_20.into_push_pull_output(Level::Low).degrade();
         let flashnfc_spi_miso = gpio_p0.p0_21.into_floating_input().degrade();
+	let _flash_wp = gpio_p0.p0_22.into_push_pull_output(Level::Low).degrade();
+	let _flash_hold = gpio_p0.p0_23.into_push_pull_output(Level::High).degrade();
 
 	let flashnfc_spi = spim::Pins {
 		sck: flashnfc_spi_clk,

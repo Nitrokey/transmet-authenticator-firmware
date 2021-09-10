@@ -9,6 +9,7 @@ use littlefs2::const_ram_storage;
 use nrf52840_hal::{
 	clocks::Clocks,
 	gpiote::Gpiote,
+	prelude::OutputPin,
 	rng::Rng,
 	rtc::{Rtc, RtcInterrupt},
 	spim::Spim,
@@ -29,9 +30,11 @@ compile_error!{"No board target chosen! Set your board using --feature; see Carg
 #[cfg_attr(feature = "board-proto1", path = "board_proto1.rs")]
 mod board;
 
+mod extflash;
 mod flash;
 mod fpr;
 mod se050;
+mod spi_nor_flash;
 mod types;
 mod ui;
 mod usb;
@@ -177,18 +180,22 @@ const APP: () = {
 			secelem.enable().expect("SE050 ERROR");
 		}
 
-		rtt_target::rprintln!("Flash");
+		rtt_target::rprintln!("Internal Flash");
 
 		let stickflash = flash::FlashStorage::new(ctx.device.NVMC, 0x000E_0000 as *mut u32, flash::FLASH_SIZE as usize);
-		/*if cfg!(feature = "reformat-flash") {
-			rtt_target::rprintln!("--> ERASING FLASH");
-			stickflash.erase(0, flash::FLASH_SIZE).ok();
-		}*/
-		/*
-		let mut chkflash: [u8; 4] = [0, 0, 0, 0];
-		stickflash.read(8, &mut chkflash);
-		rtt_target::rprintln!("Flash Read Test: {:02x} {:02x} {:02x} {:02x}", chkflash[0], chkflash[1], chkflash[2], chkflash[3]);
-		*/
+
+		rtt_target::rprintln!("External Flash");
+
+		let mut spim3 = Spim::new(ctx.device.SPIM3, board_gpio.flashnfc_spi.take().unwrap(),
+			nrf52840_hal::spim::Frequency::M2,
+			nrf52840_hal::spim::MODE_0,
+			0x00u8,
+		);
+		unsafe { let spim3_pac = nrf52840_hal::pac::Peripherals::steal().SPIM3; spim3_pac.psel.csn.write(|w| w.bits(17)); }
+		let mut stickextflash = extflash::ExtFlashStorage::new(&mut spim3,
+					board_gpio.flash_cs.take().unwrap(),
+					board_gpio.flash_power);
+		stickextflash.init(&mut spim3);
 
 		rtt_target::rprintln!("Trussed Store");
 
