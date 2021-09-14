@@ -4,6 +4,7 @@
 use panic_halt as _;
 // use cortex_m;
 use asm_delay::bitrate::U32BitrateExt;
+use embedded_hal::prelude::_embedded_hal_blocking_delay_DelayMs;
 use generic_array::typenum::consts;
 use littlefs2::const_ram_storage;
 use nrf52840_hal::{
@@ -34,7 +35,7 @@ mod extflash;
 mod flash;
 mod fpr;
 mod se050;
-mod spi_nor_flash;
+// mod spi_nor_flash;
 mod types;
 mod ui;
 mod usb;
@@ -90,6 +91,7 @@ const APP: () = {
 		usb: Option<usb::USBObjects<'static>>,
 		#[init(None)]
 		usb_dispatcher: Option<usb::USBDispatcher>,
+		se050: Option<se050::Se050<nrf52840_hal::pac::TWIM1>>,
 		power: nrf52840_hal::pac::POWER,
 		rtc: Rtc<nrf52840_hal::pac::RTC0>,
 		piv_app: piv_authenticator::Authenticator<TrussedNRFClient, {apdu_dispatch::command::SIZE}>,
@@ -121,6 +123,8 @@ const APP: () = {
 			(da1 >> 8) as u8, da1 as u8,
 			(da0 >> 24) as u8, (da0 >> 16) as u8, (da0 >> 8) as u8, da0 as u8,
 			if (ficr.deviceaddrtype.read().bits() & 1) != 0 { "RND" } else { "PUB" });
+		rtt_target::rprintln!("RESET Reason: {:08x}", ctx.device.POWER.resetreas.read().bits());
+		ctx.device.POWER.resetreas.write(|w| w);
 
 		board::init_early(&ctx.device, &ctx.core);
 
@@ -152,7 +156,6 @@ const APP: () = {
 		rtt_target::rprintln!("Display");
 
 		if board_gpio.display_power.is_some() {
-			use nrf52840_hal::prelude::OutputPin;
 			board_gpio.display_power.as_mut().unwrap().set_low().ok();
 		}
 		let spi = Spim::new(ctx.device.SPIM0, board_gpio.display_spi.take().unwrap(),
@@ -174,11 +177,12 @@ const APP: () = {
 
 		rtt_target::rprintln!("Secure Element");
 
-		if board_gpio.se_pins.is_some() {
+		let se050 = if board_gpio.se_pins.is_some() {
 			let twim1 = Twim::new(ctx.device.TWIM1, board_gpio.se_pins.take().unwrap(), nrf52840_hal::twim::Frequency::K400);
 			let mut secelem = se050::Se050::new(twim1, board_gpio.se_power.take().unwrap());
 			secelem.enable().expect("SE050 ERROR");
-		}
+			Some(secelem)
+		} else { None };
 
 		rtt_target::rprintln!("Internal Flash");
 
@@ -191,7 +195,6 @@ const APP: () = {
 			nrf52840_hal::spim::MODE_0,
 			0x00u8,
 		);
-		unsafe { let spim3_pac = nrf52840_hal::pac::Peripherals::steal().SPIM3; spim3_pac.psel.csn.write(|w| w.bits(17)); }
 		let mut stickextflash = extflash::ExtFlashStorage::new(&mut spim3,
 					board_gpio.flash_cs.take().unwrap(),
 					board_gpio.flash_power);
@@ -250,6 +253,7 @@ const APP: () = {
 			trussed_service: srv,
 			finger: fprx,
 			pre_usb: Some(usb_preinit),
+			se050,
 			power,
 			rtc,
 			piv_app,
@@ -382,7 +386,7 @@ const APP: () = {
 		}
 	}
 
-	#[task(priority = 4, binds = RTC0, resources = [rtc], spawn = [frontend, userspace_apps, comm_keepalives])]
+	#[task(priority = 4, binds = RTC0, resources = [rtc], spawn = [frontend, userspace_apps, comm_keepalives, try_system_off])]
 	fn rtc_handler(ctx: rtc_handler::Context) {
 		let rtc_count = ctx.resources.rtc.get_counter();
 		rtt_target::rprintln!("irq RTC {:x}", rtc_count);
@@ -393,6 +397,11 @@ const APP: () = {
 		}
 		ctx.spawn.frontend(FrontendOp::RefreshUI(rtc_count)).ok();
 		ctx.spawn.userspace_apps().ok();
+
+		if rtc_count == 60*8 {
+			/* SYSTEM OFF experiments start at sysboot+60s */
+			ctx.spawn.try_system_off().ok();
+		}
 	}
 
 	#[task(priority = 3, binds = POWER_CLOCK, resources = [power], spawn = [frontend, late_setup_usb])]
@@ -419,6 +428,22 @@ const APP: () = {
 			power.events_usbremoved.write(|w| unsafe { w.bits(0) });
 			ctx.spawn.frontend(FrontendOp::SetBatteryState(ui::StickBatteryState::Discharging(10))).ok();
 		}
+	}
+
+	#[task(priority = 1, resources = [power])]
+	fn try_system_off(ctx: try_system_off::Context) {
+		let try_system_off::Resources { mut power } = ctx.resources;
+		rtt_target::rprintln!("System OFF Sequence");
+
+		/* cut power to display */
+		/* cut power to fingerprint */
+		/* cut power to external flash */
+
+		power.lock(|power|
+			{ power.systemoff.write(|w| unsafe { w.bits(1) }); }
+		);
+		core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+		loop {}
 	}
 
 	extern "C" {
@@ -501,4 +526,9 @@ fn setup_store(flash: flash::FlashStorage, reformat: bool) -> StickStore {
 	*/
 
 	store
+}
+
+pub fn board_delay(ms: u32) {
+	let mut d = asm_delay::AsmDelay::new(64_u32.mhz());
+	d.delay_ms(ms);
 }
