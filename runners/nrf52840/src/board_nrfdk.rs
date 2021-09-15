@@ -102,3 +102,14 @@ pub fn init_gpio(gpiote: &Gpiote, gpio_p0: p0::Parts, gpio_p1: p1::Parts) -> Boa
 		nfc_irq: None,
 	}
 }
+
+pub fn is_keepalive_pin(pinport: u32) -> bool {
+	(pinport == 0x0b) ||
+	(pinport == 0x0c) ||
+	(pinport == 0x18) ||
+	(pinport == 0x19) ||
+	(pinport == 0x25) ||
+	(pinport == 0x26) ||
+	(pinport == 0x27) ||
+	(pinport == 0x28)
+}

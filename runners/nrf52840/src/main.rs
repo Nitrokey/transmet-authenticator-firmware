@@ -460,6 +460,29 @@ const APP: () = {
 				pac.TWIM1.enable.write(|w| w.bits(0));
 				pac.SPIM3.enable.write(|w| w.bits(0));
 				pac.UARTE0.enable.write(|w| w.bits(0));
+				pac.USBD.enable.write(|w| w.bits(0));
+				for i in 0..64 {
+					if board::is_keepalive_pin(i) {
+						continue;
+					}
+					/* can't factor out, pac.P0 and pac.P1 have different types;
+					   *sigh* Rust type safety craziness */
+					if i < 32 {
+						pac.P0.pin_cnf[(i & 0x1f) as usize].write(|w|
+							{ w.dir().input()
+							.drive().s0s1()
+							.pull().disabled()
+							.input().disconnect()
+							.sense().disabled() });
+					} else {
+						pac.P1.pin_cnf[(i & 0x1f) as usize].write(|w|
+							{ w.dir().input()
+							.drive().s0s1()
+							.pull().disabled()
+							.input().disconnect()
+							.sense().disabled() });
+					}
+				}
 			}
 		}
 		160 => {

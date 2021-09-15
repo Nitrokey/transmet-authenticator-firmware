@@ -3,7 +3,7 @@ use embedded_hal::blocking::spi::Transfer;
 use nrf52840_hal::{
 	gpio::{Output, Pin, PushPull},
 	prelude::OutputPin,
-	spim::TransferSplitRead,
+	// spim::TransferSplitRead,
 };
 
 struct FlashProperties {
@@ -27,14 +27,14 @@ const FLASH_PROPERTIES: FlashProperties = FlashProperties {
 	flash_jedec: [0x00, 0xc2, 0x28, 0x17, 0xc2, 0x28, 0x17, 0xc2, 0x28, 0x17, 0xc2, 0x28],
 };
 
-pub struct ExtFlashStorage<SPI> where SPI: Transfer<u8> + TransferSplitRead<u8> {
+pub struct ExtFlashStorage<SPI> where SPI: Transfer<u8> /*+ TransferSplitRead<u8>*/ {
 	// extflash: SpiNorFlash<SPI, Pin<Output<PushPull>>>,
 	cs_pin: Pin<Output<PushPull>>,
 	power_pin: Option<Pin<Output<PushPull>>>,
 	_spi: core::marker::PhantomData<SPI>,
 }
 
-impl<SPI> littlefs2::driver::Storage for ExtFlashStorage<SPI> where SPI: Transfer<u8> + TransferSplitRead<u8> {
+impl<SPI> littlefs2::driver::Storage for ExtFlashStorage<SPI> where SPI: Transfer<u8> /*+ TransferSplitRead<u8>*/ {
 
 	const BLOCK_SIZE: usize = 4096;
 	const READ_SIZE: usize = 4;
@@ -65,7 +65,7 @@ impl<SPI> littlefs2::driver::Storage for ExtFlashStorage<SPI> where SPI: Transfe
 	}
 }
 
-impl<SPI> ExtFlashStorage<SPI> where SPI: Transfer<u8> + TransferSplitRead<u8> {
+impl<SPI> ExtFlashStorage<SPI> where SPI: Transfer<u8> /*+ TransferSplitRead<u8>*/ {
 
 	pub fn new(_spim: &mut SPI, cs: Pin<Output<PushPull>>, power_pin: Option<Pin<Output<PushPull>>>) -> Self {
 		Self { cs_pin: cs, power_pin, _spi: core::marker::PhantomData {} }
