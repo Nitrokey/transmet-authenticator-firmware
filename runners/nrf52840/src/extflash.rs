@@ -77,7 +77,7 @@ impl<SPI> ExtFlashStorage<SPI> where SPI: Transfer<u8> + TransferSplitRead<u8> {
 			/* TODO: ensure stopped before writing CSN? */
 			spim3_pac.psel.csn.write(|w| w.bits(self.cs_pin.psel_bits()));
 		}
-		self.power_up();
+		self.power_on();
 
 		let mut jedec = [0u8; 12];
 		read_jedec(spim, &mut jedec);
@@ -93,13 +93,18 @@ impl<SPI> ExtFlashStorage<SPI> where SPI: Transfer<u8> + TransferSplitRead<u8> {
 		}
 	}
 
-	fn power_up(&mut self) {
+	fn power_on(&mut self) {
 		if let Some(pwr_pin) = self.power_pin.as_mut() {
 			pwr_pin.set_high().ok();
 			crate::board_delay(200u32);
 		}
 	}
 
+	pub fn power_off(&mut self) {
+		if let Some(pwr_pin) = self.power_pin.as_mut() {
+			pwr_pin.set_low().ok();
+		}
+	}
 }
 
 fn read_jedec<SPI>(spim: &mut SPI, buf: &mut [u8; 12]) where SPI: Transfer<u8> {

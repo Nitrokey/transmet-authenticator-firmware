@@ -100,6 +100,10 @@ impl<T> Se050<T> where T: nrf52840_hal::twim::Instance {
 		Ok(())
 	}
 
+	pub fn disable(&mut self) {
+		self.power_pin.set_low().ok();
+	}
+
 	/* Intermediate-Level request/response handlers */
 
 	fn send_request(&mut self, code: u8, buf: Option<&[u8]>) -> Result<(), SeError> {

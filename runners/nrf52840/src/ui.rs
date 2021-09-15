@@ -22,6 +22,7 @@ enum StickUIState {
 	Logo,
 	Idle,
 	// ShowRequest
+	PoweredDown,
 }
 
 pub enum StickBatteryState {
@@ -104,13 +105,23 @@ pub struct StickUI {
 }
 
 impl StickUI {
-	pub fn new(dsp: Display, buttons: [Option<InPin>; 8], leds: [Option<OutPin>; 4]) -> Self {
+	pub fn new(mut dsp: Display, buttons: [Option<InPin>; 8], leds: [Option<OutPin>; 4]) -> Self {
 		let xbuf = unsafe { &mut DISPLAY_BUF };
+		dsp.power_on();
 		Self {
 			buf: xbuf, dsp, buttons, leds,
 			state: StickUIState::PreInitGarbled,
 			battery_state: StickBatteryState::Unknown,
 			update_due: 0 }
+	}
+
+	pub fn power_on(&mut self) {
+		self.dsp.power_on();
+	}
+
+	pub fn power_off(&mut self) {
+		self.dsp.power_off();
+		self.state = StickUIState::PoweredDown;
 	}
 
 	pub fn check_buttons(&self, latches: &[u32]) {
@@ -183,6 +194,7 @@ impl StickUI {
 			self.dsp.blit_at(&self.buf[0..25*10*2], 240-26, 2, 25, 10);
 			self.update_due = t + 8;
 			}
+		StickUIState::PoweredDown => {}
 		}
 	}
 
@@ -328,6 +340,7 @@ impl Display {
 	pub fn power_on(&mut self) {
 		if self.power_gate.is_some() {
 			self.power_gate.as_mut().unwrap().set_low().ok();
+			self.lldisplay.init(&mut crate::Nrf52840Delay {}).unwrap();
 			/* TODO: repeat initialization procedure (lldisplay.init(delay_provider)) */
 		}
 	}

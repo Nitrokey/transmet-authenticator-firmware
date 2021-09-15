@@ -91,6 +91,7 @@ const APP: () = {
 		usb: Option<usb::USBObjects<'static>>,
 		#[init(None)]
 		usb_dispatcher: Option<usb::USBDispatcher>,
+		extflash: Option<extflash::ExtFlashStorage<nrf52840_hal::spim::Spim<nrf52840_hal::pac::SPIM3>>>,
 		se050: Option<se050::Se050<nrf52840_hal::pac::TWIM1>>,
 		power: nrf52840_hal::pac::POWER,
 		rtc: Rtc<nrf52840_hal::pac::RTC0>,
@@ -137,11 +138,6 @@ const APP: () = {
 		let power = ctx.device.POWER;
 		let mut rtc = Rtc::new(ctx.device.RTC0, 4095).unwrap();
 
-		/* RTIC actively hides cortex_m::peripherals::SYST from us, so we cannot use
-		nrf52840_hal::delay - hack around it by using a plain old
-		"assembly delay loop" based on the (hardcoded) CPU frequency */
-		let mut delay_provider = asm_delay::AsmDelay::new(64_u32.mhz());
-
 		rtt_target::rprintln!("Pins");
 
 		let mut board_gpio = board::init_gpio(&gpiote, p0, p1);
@@ -164,9 +160,9 @@ const APP: () = {
 			0x7e_u8,
 		);
 		let di_spi = display_interface_spi::SPIInterfaceNoCS::new(spi, board_gpio.display_dc.take().unwrap());
-		let mut dsp_st7789 = picolcd114::ST7789::new(di_spi, board_gpio.display_reset.take().unwrap(), 240, 135, 40, 53);
+		let dsp_st7789 = picolcd114::ST7789::new(di_spi, board_gpio.display_reset.take().unwrap(), 240, 135, 40, 53);
 
-		dsp_st7789.init(&mut delay_provider).unwrap();
+		// dsp_st7789.init(&mut delay_provider).unwrap();
 
 		let disp = ui::Display::new(dsp_st7789,
 				board_gpio.display_backlight.take().unwrap(),
@@ -253,6 +249,7 @@ const APP: () = {
 			trussed_service: srv,
 			finger: fprx,
 			pre_usb: Some(usb_preinit),
+			extflash: Some(stickextflash),
 			se050,
 			power,
 			rtc,
@@ -398,9 +395,9 @@ const APP: () = {
 		ctx.spawn.frontend(FrontendOp::RefreshUI(rtc_count)).ok();
 		ctx.spawn.userspace_apps().ok();
 
-		if rtc_count == 60*8 {
+		if (rtc_count >= 60*8) && (rtc_count % (20*8) == 0) {
 			/* SYSTEM OFF experiments start at sysboot+60s */
-			ctx.spawn.try_system_off().ok();
+			ctx.spawn.try_system_off(rtc_count).ok();
 		}
 	}
 
@@ -430,20 +427,51 @@ const APP: () = {
 		}
 	}
 
-	#[task(priority = 1, resources = [power])]
-	fn try_system_off(ctx: try_system_off::Context) {
-		let try_system_off::Resources { mut power } = ctx.resources;
-		rtt_target::rprintln!("System OFF Sequence");
+	#[task(priority = 1, resources = [extflash, finger, ui, power, se050])]
+	fn try_system_off(ctx: try_system_off::Context, c: u32) {
+		let try_system_off::Resources { extflash, finger, ui, mut power, se050 } = ctx.resources;
 
-		/* cut power to display */
-		/* cut power to fingerprint */
-		/* cut power to external flash */
-
-		power.lock(|power|
-			{ power.systemoff.write(|w| unsafe { w.bits(1) }); }
-		);
-		core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
-		loop {}
+		match c/8 {
+		60 => {
+			rtt_target::rprintln!("System OFF: UI");
+			/* cut power to display */
+			ui.power_off();
+		}
+		80 => {
+			rtt_target::rprintln!("System OFF: FPR");
+			/* cut power to fingerprint */
+			finger.as_mut().unwrap().power_down().ok();
+		}
+		100 => {
+			rtt_target::rprintln!("System OFF: EXTFLASH");
+			/* cut power to external flash */
+			extflash.as_mut().unwrap().power_off();
+		}
+		120 => {
+			rtt_target::rprintln!("System OFF: SE050");
+			/* cut power to SE050 */
+			if let Some(se) = se050 { se.disable(); }
+		}
+		140 => {
+			rtt_target::rprintln!("System OFF: busses");
+			unsafe {
+				let pac = nrf52840_hal::pac::Peripherals::steal();
+				pac.SPIM0.enable.write(|w| w.bits(0));
+				pac.TWIM1.enable.write(|w| w.bits(0));
+				pac.SPIM3.enable.write(|w| w.bits(0));
+				pac.UARTE0.enable.write(|w| w.bits(0));
+			}
+		}
+		160 => {
+			rtt_target::rprintln!("System OFF");
+			power.lock(|power|
+				{ power.systemoff.write(|w| unsafe { w.bits(1) }); }
+			);
+			core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+			loop {}
+		}
+		_ => {}
+		}
 	}
 
 	extern "C" {
@@ -528,7 +556,25 @@ fn setup_store(flash: flash::FlashStorage, reformat: bool) -> StickStore {
 	store
 }
 
+/* RTIC actively hides cortex_m::peripherals::SYST from us, so we cannot use
+nrf52840_hal::delay - hack around it by using a plain old
+"assembly delay loop" based on the (hardcoded) CPU frequency */
+pub struct Nrf52840Delay {}
+
+impl embedded_hal::blocking::delay::DelayMs<u32> for Nrf52840Delay {
+	fn delay_ms(&mut self, ms: u32) {
+		let mut d = asm_delay::AsmDelay::new(64_u32.mhz());
+		d.delay_ms(ms);
+	}
+}
+
+impl embedded_hal::blocking::delay::DelayUs<u32> for Nrf52840Delay {
+	fn delay_us(&mut self, us: u32) {
+		let mut d = asm_delay::AsmDelay::new(64_u32.mhz());
+		d.delay_us(us);
+	}
+}
+
 pub fn board_delay(ms: u32) {
-	let mut d = asm_delay::AsmDelay::new(64_u32.mhz());
-	d.delay_ms(ms);
+	(Nrf52840Delay {}).delay_ms(ms);
 }
