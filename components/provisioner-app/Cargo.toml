@@ -12,6 +12,7 @@ delog = "0.1.1"
 heapless = "0.7"
 heapless-bytes = "0.3"
 lpc55-hal = { version = "0.3", features = ["littlefs", "rtic-peripherals"] }
+nrf52840-pac = "0.9"
 littlefs2 = "0.3.1"
 trussed = { git = "https://github.com/trussed-dev/trussed", branch = "main" }
 
@@ -33,3 +34,7 @@ log-warn = []
 log-error = []
 
 test-attestation = []
+
+# supported boards / HALs
+lpc55 = []
+nrf52 = []

@@ -95,9 +95,10 @@ const APP: () = {
 		se050: Option<se050::Se050<nrf52840_hal::pac::TWIM1>>,
 		power: nrf52840_hal::pac::POWER,
 		rtc: Rtc<nrf52840_hal::pac::RTC0>,
-		piv_app: piv_authenticator::Authenticator<TrussedNRFClient, {apdu_dispatch::command::SIZE}>,
 		fido_app: dispatch_fido::Fido<fido_authenticator::NonSilentAuthenticator, TrussedNRFClient>,
 		admin_app: admin_app::App<TrussedNRFClient, NRFReboot>,
+		piv_app: piv_authenticator::Authenticator<TrussedNRFClient, {apdu_dispatch::command::SIZE}>,
+		prov_app: provisioner_app::Provisioner<StickStore, flash::FlashStorage, TrussedNRFClient>,
 	}
 
 	#[init(spawn = [frontend])]
@@ -199,7 +200,7 @@ const APP: () = {
 		rtt_target::rprintln!("Trussed Store");
 
 		let stickstore = setup_store(stickflash, cfg!(feature = "reformat-flash"));
-		// let stickstore_prov = stickstore.clone();
+		let stickstore_prov = stickstore.clone();
 
 		rtt_target::rprintln!("Trussed Platform");
 
@@ -215,7 +216,7 @@ const APP: () = {
 
 		rtt_target::rprintln!("Apps");
 
-		let (fido_app, admin_app, piv_app) = instantiate_apps(&mut srv, device_uuid);
+		let (fido_app, admin_app, piv_app, prov_app) = instantiate_apps(&mut srv, stickstore_prov, device_uuid);
 
 		rtt_target::rprintln!("USB");
 
@@ -253,9 +254,10 @@ const APP: () = {
 			se050,
 			power,
 			rtc,
-			piv_app,
 			fido_app,
-			admin_app
+			admin_app,
+			piv_app,
+			prov_app
 		}
 	}
 
@@ -511,10 +513,18 @@ const APP: () = {
 	}
 };
 
-fn instantiate_apps(srv: &mut trussed::service::Service<StickPlatform>, device_uuid: [u8; 16]) ->
+static mut INTERNAL_STORAGE: Option<flash::FlashStorage> = None;
+static mut INTERNAL_FS_ALLOC: Option<littlefs2::fs::Allocation<flash::FlashStorage>> = None;
+static mut EXTERNAL_STORAGE: Option<ExternalRAMStore> = None;
+static mut EXTERNAL_FS_ALLOC: Option<littlefs2::fs::Allocation<ExternalRAMStore>> = None;
+static mut VOLATILE_STORAGE: Option<VolatileRAMStore> = None;
+static mut VOLATILE_FS_ALLOC: Option<littlefs2::fs::Allocation<VolatileRAMStore>> = None;
+
+fn instantiate_apps(srv: &mut trussed::service::Service<StickPlatform>, store: StickStore, device_uuid: [u8; 16]) ->
 	(dispatch_fido::Fido<fido_authenticator::NonSilentAuthenticator, TrussedNRFClient>,
 	admin_app::App<TrussedNRFClient, NRFReboot>,
-	piv_authenticator::Authenticator<TrussedNRFClient, {apdu_dispatch::command::SIZE}>) {
+	piv_authenticator::Authenticator<TrussedNRFClient, {apdu_dispatch::command::SIZE}>,
+	provisioner_app::Provisioner<StickStore, flash::FlashStorage, TrussedNRFClient>) {
 	let fido_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
 	let fido_lfs2_path = littlefs2::path::PathBuf::from("fido");
 	srv.add_endpoint(fido_trussed_xch.1, fido_lfs2_path).ok();
@@ -533,25 +543,18 @@ fn instantiate_apps(srv: &mut trussed::service::Service<StickPlatform>, device_u
 	srv.add_endpoint(piv_trussed_xch.1, piv_lfs2_path).ok();
 	let piv_trussed_client = TrussedNRFClient::new(piv_trussed_xch.0, NRFSyscall {});
 	let piv_app = piv_authenticator::Authenticator::<TrussedNRFClient, {apdu_dispatch::command::SIZE}>::new(piv_trussed_client);
-/*
+
 	let prov_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
-	let prov_lfs2_path = littlefs2::path::PathBuf::from("pro");
+	let prov_lfs2_path = littlefs2::path::PathBuf::from("attn");
 	srv.add_endpoint(prov_trussed_xch.1, prov_lfs2_path).ok();
 	let prov_trussed_client = TrussedNRFClient::new(prov_trussed_xch.0, NRFSyscall {});
-	let prov_app = provisioner_app::Provisioner::<StickStore, flash::FlashStorage, TrussedNRFClient>::new(prov_trussed_client, store, &mut internal_flash, false);
-*/
+	let stolen_internal_fs = unsafe { &mut INTERNAL_STORAGE };
+	let prov_app = provisioner_app::Provisioner::<StickStore, flash::FlashStorage, TrussedNRFClient>::new(prov_trussed_client, store, stolen_internal_fs.as_mut().unwrap(), false);
 
-	(fido_app, admin_app, piv_app)
+	(fido_app, admin_app, piv_app, prov_app)
 }
 
 fn setup_store(flash: flash::FlashStorage, reformat: bool) -> StickStore {
-	static mut INTERNAL_STORAGE: Option<flash::FlashStorage> = None;
-	static mut INTERNAL_FS_ALLOC: Option<littlefs2::fs::Allocation<flash::FlashStorage>> = None;
-	static mut EXTERNAL_STORAGE: Option<ExternalRAMStore> = None;
-	static mut EXTERNAL_FS_ALLOC: Option<littlefs2::fs::Allocation<ExternalRAMStore>> = None;
-	static mut VOLATILE_STORAGE: Option<VolatileRAMStore> = None;
-	static mut VOLATILE_FS_ALLOC: Option<littlefs2::fs::Allocation<VolatileRAMStore>> = None;
-
 	unsafe {
 		INTERNAL_STORAGE.replace(flash);
 		INTERNAL_FS_ALLOC = Some(littlefs2::fs::Filesystem::allocate());
