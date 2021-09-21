@@ -341,7 +341,6 @@ impl Display {
 		if self.power_gate.is_some() {
 			self.power_gate.as_mut().unwrap().set_low().ok();
 			self.lldisplay.init(&mut crate::Nrf52840Delay {}).unwrap();
-			/* TODO: repeat initialization procedure (lldisplay.init(delay_provider)) */
 		}
 	}
 

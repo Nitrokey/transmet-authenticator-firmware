@@ -395,7 +395,7 @@ const APP: () = {
 		ctx.spawn.frontend(FrontendOp::RefreshUI(rtc_count)).ok();
 		ctx.spawn.userspace_apps().ok();
 
-		if (rtc_count >= 60*8) && (rtc_count % (20*8) == 0) {
+		if (rtc_count >= 60*8) && (rtc_count % (10*8) == 0) {
 			/* SYSTEM OFF experiments start at sysboot+60s */
 			ctx.spawn.try_system_off(rtc_count).ok();
 		}
@@ -437,23 +437,23 @@ const APP: () = {
 			/* cut power to display */
 			ui.power_off();
 		}
-		80 => {
+		70 => {
 			rtt_target::rprintln!("System OFF: FPR");
 			/* cut power to fingerprint */
 			finger.as_mut().unwrap().power_down().ok();
 		}
-		100 => {
+		80 => {
 			rtt_target::rprintln!("System OFF: EXTFLASH");
 			/* cut power to external flash */
 			extflash.as_mut().unwrap().power_off();
 		}
-		120 => {
+		90 => {
 			rtt_target::rprintln!("System OFF: SE050");
 			/* cut power to SE050 */
 			if let Some(se) = se050 { se.disable(); }
 		}
-		140 => {
-			rtt_target::rprintln!("System OFF: busses");
+		100 => {
+			rtt_target::rprintln!("System OFF: busses+clocks");
 			unsafe {
 				let pac = nrf52840_hal::pac::Peripherals::steal();
 				pac.SPIM0.enable.write(|w| w.bits(0));
@@ -461,6 +461,14 @@ const APP: () = {
 				pac.SPIM3.enable.write(|w| w.bits(0));
 				pac.UARTE0.enable.write(|w| w.bits(0));
 				pac.USBD.enable.write(|w| w.bits(0));
+				pac.CLOCK.tasks_hfclkstop.write(|w| w.bits(1));
+				// pac.CLOCK.tasks_lfclkstop.write(|w| w.bits(1));
+			}
+		}
+		110 => {
+			rtt_target::rprintln!("System OFF: pins");
+			unsafe {
+				let pac = nrf52840_hal::pac::Peripherals::steal();
 				for i in 0..64 {
 					if board::is_keepalive_pin(i) {
 						continue;
@@ -485,7 +493,7 @@ const APP: () = {
 				}
 			}
 		}
-		160 => {
+		120 => {
 			rtt_target::rprintln!("System OFF");
 			power.lock(|power|
 				{ power.systemoff.write(|w| unsafe { w.bits(1) }); }
