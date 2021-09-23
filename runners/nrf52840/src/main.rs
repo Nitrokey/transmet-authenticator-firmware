@@ -50,6 +50,8 @@ trussed::store!(
 	Volatile: VolatileRAMStore
 );
 
+unsafe impl Send for StickStore {}
+
 trussed::platform!(
 	StickPlatform,
 	R: chacha20::ChaCha8Rng,
@@ -290,15 +292,15 @@ const APP: () = {
 		}
 	}
 
-	#[task(priority = 1, resources = [usb_dispatcher, piv_app, fido_app, admin_app])]
+	#[task(priority = 1, resources = [usb_dispatcher, fido_app, admin_app, piv_app, prov_app])]
 	#[inline(never)]
 	fn userspace_apps(ctx: userspace_apps::Context) {
-		let userspace_apps::Resources { usb_dispatcher, piv_app, fido_app, admin_app} = ctx.resources;
+		let userspace_apps::Resources { usb_dispatcher, fido_app, admin_app, piv_app, prov_app} = ctx.resources;
 
 		//usb_dispatcher.lock(|usb_dispatcher| {
 		if usb_dispatcher.is_some() {
 			cortex_m::peripheral::NVIC::mask(nrf52840_hal::pac::Interrupt::USBD);
-			let (raise_usb, _raise_nfc) = usb_dispatcher.as_mut().unwrap().poll_apps(&mut [fido_app, admin_app], &mut [piv_app]);
+			let (raise_usb, _raise_nfc) = usb_dispatcher.as_mut().unwrap().poll_apps(&mut [fido_app, admin_app], &mut [piv_app, prov_app]);
 			if raise_usb {
 				rtt_target::rprintln!("rUSB");
 				rtic::pend(nrf52840_hal::pac::Interrupt::USBD);
@@ -397,7 +399,7 @@ const APP: () = {
 		ctx.spawn.frontend(FrontendOp::RefreshUI(rtc_count)).ok();
 		ctx.spawn.userspace_apps().ok();
 
-		if (rtc_count >= 60*8) && (rtc_count % (10*8) == 0) {
+		if (rtc_count >= 600*8) && (rtc_count % (10*8) == 0) {
 			/* SYSTEM OFF experiments start at sysboot+60s */
 			ctx.spawn.try_system_off(rtc_count).ok();
 		}

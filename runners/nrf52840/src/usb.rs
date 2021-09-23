@@ -98,7 +98,7 @@ impl USBObjects<'static> {
 		}
 		if let usbd_ccid::types::Status::ReceivedData(_) = self.ccid_class.did_start_processing() {
 			rtt_target::rprintln!("-KeepC");
-			// self.ccid_class.send_wait_extension();
+			self.ccid_class.send_wait_extension();
 		}
 	}
 }
