@@ -63,7 +63,7 @@ littlefs2 = "0.3.1"
 
 [features]
 
-default = ["no-reset-time-window", "trussed/clients-5", "log-all"]
+default = ["no-reset-time-window", "trussed/clients-5", "log-debugP"]
 
 # Allow resetting FIDO authenticator (and possibly others) even after 10s uptime
 no-reset-time-window = ["fido-authenticator/disable-reset-time-window"]
@@ -75,6 +75,10 @@ log-info = []
 log-warn = []
 log-error = []
 log-none = []
+
+log-debugP = [ "log-debug", "log-info", "log-warn", "log-error" ]
+log-infoP = [ "log-info", "log-warn", "log-error" ]
+log-warnP = [ "log-warn", "log-error" ]
 
 ### new features for our own NRF52 port
 board-nrfdk = []

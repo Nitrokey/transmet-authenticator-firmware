@@ -42,6 +42,7 @@ pub fn init(preinit: USBPreinitObjects) -> (USBObjects<'static>, USBDispatcher) 
 			.usbreset().set_bit()
 			.usbevent().set_bit()
 			.sof().set_bit()
+			/* .epdata().set_bit() */
 			.ep0datadone().set_bit()
 			.ep0setup().set_bit());
 
@@ -105,8 +106,13 @@ impl USBObjects<'static> {
 
 impl USBDispatcher {
 	// Polls for activity from the userspace applications (called during IDLE) //
-	pub fn poll_apps(&mut self, ctaphid_apps: &mut [&mut dyn ctaphid_dispatch::app::App], apdu_apps: &mut [&mut dyn apdu_dispatch::app::App<{apdu_dispatch::command::SIZE}, {apdu_dispatch::response::SIZE}>]) -> (bool, bool) {
-		let mut raise_usb = self.ctaphid_dispatch.poll(ctaphid_apps);
+	pub fn poll_ctaphid_apps(&mut self, ctaphid_apps: &mut [&mut dyn ctaphid_dispatch::app::App]) -> (bool, bool) {
+		let raise_usb = self.ctaphid_dispatch.poll(ctaphid_apps);
+		(raise_usb, false)
+	}
+
+	pub fn poll_apdu_apps(&mut self, apdu_apps: &mut [&mut dyn apdu_dispatch::app::App<{apdu_dispatch::command::SIZE}, {apdu_dispatch::response::SIZE}>]) -> (bool, bool) {
+		let mut raise_usb = false;
 		let mut raise_nfc = false;
 		match self.apdu_dispatch.poll(apdu_apps) {
 		Some(apdu_dispatch::dispatch::Interface::Contact) => { raise_usb = true; },

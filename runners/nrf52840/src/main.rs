@@ -317,8 +317,9 @@ const APP: () = {
 		//usb_dispatcher.lock(|usb_dispatcher| {
 		if usb_dispatcher.is_some() {
 			cortex_m::peripheral::NVIC::mask(nrf52840_hal::pac::Interrupt::USBD);
-			let (raise_usb, _raise_nfc) = usb_dispatcher.as_mut().unwrap().poll_apps(&mut [fido_app, admin_app], &mut [piv_app, prov_app]);
-			if raise_usb {
+			let (r0_usb, _r0_nfc) = usb_dispatcher.as_mut().unwrap().poll_ctaphid_apps(&mut [fido_app, admin_app]);
+			let (r1_usb, _r1_nfc) = usb_dispatcher.as_mut().unwrap().poll_apdu_apps(&mut [fido_app, admin_app, piv_app, prov_app]);
+			if r0_usb || r1_usb {
 				trace!("rUSB");
 				rtic::pend(nrf52840_hal::pac::Interrupt::USBD);
 			}
@@ -353,7 +354,7 @@ const APP: () = {
 
 	#[task(priority = 2, binds = SWI0_EGU0, resources = [trussed_service])]
 	fn irq_trussed(ctx: irq_trussed::Context) {
-		// trace!("irq SYS");
+		trace!("irq SYS");
 		ctx.resources.trussed_service.process();
 	}
 
@@ -379,15 +380,16 @@ const APP: () = {
 	#[task(priority = 3, binds = USBD, resources = [usb])]
 	fn usb_handler(ctx: usb_handler::Context) {
 		let usb_handler::Resources { usb } = ctx.resources;
-		// trace!("irq USB {:x}", usb::usbd_debug_events());
+		// trace!("irq USB");
+		trace_now!("irq USB {:x}", usb::usbd_debug_events());
 
 		if let Some(usb_) = usb {
 			let e0 = Instant::now();
-			// let ev0 = usb::usbd_debug_events();
+			let ev0 = usb::usbd_debug_events();
 
 			usb_.poll();
 
-			// let ev1 = usb::usbd_debug_events();
+			let ev1 = usb::usbd_debug_events();
 			let e1 = Instant::now();
 
 			let ed = (e1 - e0).as_cycles();
@@ -395,10 +397,17 @@ const APP: () = {
 				warn!("!! long top half: {:x} cyc", ed);
 			}
 
-			/*if (ev0 & ev1 & 0x00e0_0401) != 0 {
+			/* Watched bits:
+				[0]	usbreset
+				[10]	ep0datadone
+				[21]	sof
+				[22]	usbevent
+				[23]	ep0setup
+				[24] --	epdata
+			*/
+			if (ev0 & ev1 & 0x00e0_0401) != 0 {
 				warn!("USB screams, {:x} -> {:x}", ev0, ev1);
 			}
-			*/
 
 			usb_.send_keepalives();
 		}
