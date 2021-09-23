@@ -131,7 +131,7 @@ impl StickUI {
 			}
 			let buttonref = self.buttons[i].as_ref().unwrap();
 			if crate::types::is_pin_latched(buttonref, latches) {
-				rtt_target::rprintln!("Button {}", i);
+				info!("Button {}", i);
 			}
 		}
 	}
@@ -168,7 +168,7 @@ impl StickUI {
 
 		match self.state {
 		StickUIState::PreInitGarbled => {
-			rtt_target::rprintln!("UI P");
+			trace!("UI P");
 			self.rgb16_memset(embedded_graphics::pixelcolor::Rgb565::BLACK);
 			self.tile_bg();
 			self.state = StickUIState::Logo;
@@ -181,7 +181,7 @@ impl StickUI {
 			self.update_due = (t + 32) & 0xffff_fff8u32;
 			}
 		StickUIState::Idle => {
-			rtt_target::rprintln!("UI B");
+			trace!("UI B");
 			// self.rgb16_memset(embedded_graphics::pixelcolor::Rgb565::BLACK);
 			// self.tile_bg();
 			let battsprite: u16 = match self.battery_state {
@@ -290,7 +290,7 @@ impl trussed::platform::UserInterface for WrappedUI {
 	}
 
 	fn set_status(&mut self, _status: ui::Status) {
-		rtt_target::rprintln!("UI SetStatus");
+		info!("UI SetStatus");
 	}
 
 	fn refresh(&mut self) {}
@@ -355,7 +355,7 @@ impl Display {
 	pub fn blit_at(&mut self, buf: &[u8], x: u16, y: u16, w: u16, h: u16) {
 		let r = self.lldisplay.blit_pixels(x, y, w, h, buf);
 		if r.is_err() {
-			rtt_target::rprintln!("BlitAt ERR");
+			error!("BlitAt ERR");
 		}
 	}
 

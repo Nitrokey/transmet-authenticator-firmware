@@ -24,6 +24,10 @@ use trussed::{
 	types::{LfsResult, LfsStorage},
 };
 
+#[macro_use]
+extern crate delog;
+delog::generate_macros!();
+
 #[cfg(not(any(feature = "board-nrfdk", feature = "board-proto1")))]
 compile_error!{"No board target chosen! Set your board using --feature; see Cargo.toml."}
 
@@ -35,10 +39,19 @@ mod extflash;
 mod flash;
 mod fpr;
 mod se050;
-// mod spi_nor_flash;
 mod types;
 mod ui;
 mod usb;
+
+#[derive(Debug)]
+pub struct NRFDelogFlusher {}
+impl delog::Flusher for NRFDelogFlusher {
+	fn flush(&self, s: &str) {
+		rtt_target::rprint!(s);
+	}
+}
+static NRFDELOG_FLUSHER: NRFDelogFlusher = NRFDelogFlusher {};
+delog::delog!(NRFDelogger, 2*1024, 512, NRFDelogFlusher);
 
 /* TODO: add external flash */
 littlefs2::const_ram_storage!(ExternalRAMStore, 1024);
@@ -62,7 +75,7 @@ trussed::platform!(
 pub struct NRFSyscall {}
 impl trussed::platform::Syscall for NRFSyscall {
 	fn syscall(&mut self) {
-		// rtt_target::rprintln!("SYS");
+		// trace!("SYS");
 		rtic::pend(nrf52840_hal::pac::Interrupt::SWI0_EGU0);
 	}
 }
@@ -109,30 +122,31 @@ const APP: () = {
 		ctx.core.DWT.enable_cycle_counter();
 
 		rtt_target::rtt_init_print!();
+		NRFDelogger::init_default(delog::LevelFilter::Trace, &NRFDELOG_FLUSHER).ok();
 
 		let ficr = &*ctx.device.FICR;
 		let mut device_uuid: [u8; 16] = [0u8; 16];
 		device_uuid[0..4].copy_from_slice(&ficr.deviceid[0].read().bits().to_be_bytes());
 		device_uuid[4..8].copy_from_slice(&ficr.deviceid[1].read().bits().to_be_bytes());
-		rtt_target::rprintln!("FICR DeviceID {:08x} {:08x}", ficr.deviceid[0].read().bits(), ficr.deviceid[1].read().bits());
-		rtt_target::rprintln!("FICR EncRoot  {:08x} {:08x} {:08x} {:08x}",
+		info!("FICR DeviceID {:08x} {:08x}", ficr.deviceid[0].read().bits(), ficr.deviceid[1].read().bits());
+		info!("FICR EncRoot  {:08x} {:08x} {:08x} {:08x}",
 			ficr.er[0].read().bits(), ficr.er[1].read().bits(),
 			ficr.er[2].read().bits(), ficr.er[3].read().bits());
-		rtt_target::rprintln!("FICR IdtRoot  {:08x} {:08x} {:08x} {:08x}",
+		info!("FICR IdtRoot  {:08x} {:08x} {:08x} {:08x}",
 			ficr.ir[0].read().bits(), ficr.ir[1].read().bits(),
 			ficr.ir[2].read().bits(), ficr.ir[3].read().bits());
 		let da0 = ficr.deviceaddr[0].read().bits();
 		let da1 = ficr.deviceaddr[1].read().bits();
-		rtt_target::rprintln!("FICR DevAddr  {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} {}",
+		info!("FICR DevAddr  {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} {}",
 			(da1 >> 8) as u8, da1 as u8,
 			(da0 >> 24) as u8, (da0 >> 16) as u8, (da0 >> 8) as u8, da0 as u8,
 			if (ficr.deviceaddrtype.read().bits() & 1) != 0 { "RND" } else { "PUB" });
-		rtt_target::rprintln!("RESET Reason: {:08x}", ctx.device.POWER.resetreas.read().bits());
+		info!("RESET Reason: {:08x}", ctx.device.POWER.resetreas.read().bits());
 		ctx.device.POWER.resetreas.write(|w| w);
 
 		board::init_early(&ctx.device, &ctx.core);
 
-		rtt_target::rprintln!("Peripheral Wrappers");
+		debug!("Peripheral Wrappers");
 
 		let gpiote = Gpiote::new(ctx.device.GPIOTE);
 		let p0 = nrf52840_hal::gpio::p0::Parts::new(ctx.device.P0);
@@ -141,18 +155,18 @@ const APP: () = {
 		let power = ctx.device.POWER;
 		let mut rtc = Rtc::new(ctx.device.RTC0, 4095).unwrap();
 
-		rtt_target::rprintln!("Pins");
+		debug!("Pins");
 
 		let mut board_gpio = board::init_gpio(&gpiote, p0, p1);
 		gpiote.reset_events();
 
-		rtt_target::rprintln!("UART");
+		debug!("UART");
 
 		let uart = Uarte::new(ctx.device.UARTE0, board_gpio.uart_pins.take().unwrap(),
 				Parity::EXCLUDED, Baudrate::BAUD57600
 		);
 
-		rtt_target::rprintln!("Display");
+		debug!("Display");
 
 		if board_gpio.display_power.is_some() {
 			board_gpio.display_power.as_mut().unwrap().set_low().ok();
@@ -174,7 +188,7 @@ const APP: () = {
 
 		/* WIP: put together our hacked up LEGO bricks to create the Trussed service instance */
 
-		rtt_target::rprintln!("Secure Element");
+		debug!("Secure Element");
 
 		let se050 = if board_gpio.se_pins.is_some() {
 			let twim1 = Twim::new(ctx.device.TWIM1, board_gpio.se_pins.take().unwrap(), nrf52840_hal::twim::Frequency::K400);
@@ -183,11 +197,11 @@ const APP: () = {
 			Some(secelem)
 		} else { None };
 
-		rtt_target::rprintln!("Internal Flash");
+		debug!("Internal Flash");
 
 		let stickflash = flash::FlashStorage::new(ctx.device.NVMC, 0x000E_0000 as *mut u32, flash::FLASH_SIZE as usize);
 
-		rtt_target::rprintln!("External Flash");
+		debug!("External Flash");
 
 		let mut spim3 = Spim::new(ctx.device.SPIM3, board_gpio.flashnfc_spi.take().unwrap(),
 			nrf52840_hal::spim::Frequency::M2,
@@ -199,12 +213,12 @@ const APP: () = {
 					board_gpio.flash_power);
 		stickextflash.init(&mut spim3);
 
-		rtt_target::rprintln!("Trussed Store");
+		debug!("Trussed Store");
 
 		let stickstore = setup_store(stickflash, cfg!(feature = "reformat-flash"));
 		let stickstore_prov = stickstore.clone();
 
-		rtt_target::rprintln!("Trussed Platform");
+		debug!("Trussed Platform");
 
 		let stickplat = StickPlatform::new(
 			chacha20::ChaCha8Rng::from_rng(rng).unwrap(),
@@ -212,15 +226,15 @@ const APP: () = {
 			ui::WrappedUI::new()
 		);
 
-		rtt_target::rprintln!("Trussed Service");
+		debug!("Trussed Service");
 
 		let mut srv = trussed::service::Service::new(stickplat);
 
-		rtt_target::rprintln!("Apps");
+		debug!("Apps");
 
 		let (fido_app, admin_app, piv_app, prov_app) = instantiate_apps(&mut srv, stickstore_prov, device_uuid);
 
-		rtt_target::rprintln!("USB");
+		debug!("USB");
 
 		let clocks = Clocks::new(ctx.device.CLOCK).start_lfclk().enable_ext_hfosc();
 
@@ -228,7 +242,7 @@ const APP: () = {
 
 		let fprx = {
 		if board_gpio.fpr_power.is_some() {
-			rtt_target::rprintln!("Fingerprint Reader");
+			debug!("Fingerprint Reader");
 			let fprx_ = fpr::FingerprintReader::new(uart,
 						board_gpio.fpr_power.take().unwrap(),
 						board_gpio.fpr_detect.take().unwrap());
@@ -237,7 +251,7 @@ const APP: () = {
 			None
 		}};
 
-		rtt_target::rprintln!("Finalizing");
+		debug!("Finalizing");
 
 		// RTIC enables the interrupt during init if there is a handler function bound to it
 		rtc.enable_interrupt(RtcInterrupt::Tick, None);
@@ -272,8 +286,11 @@ const APP: () = {
 		   In the future, we might even consider entering "System OFF".
 		   In short, don't expect schedule() to work.
 		*/
-		rtt_target::rprintln!("idle");
-		loop { cortex_m::asm::wfi(); }
+		loop {
+			trace!("idle");
+			cortex_m::asm::wfi();
+			NRFDelogger::flush();
+		}
 		// loop {}
 	}
 
@@ -302,7 +319,7 @@ const APP: () = {
 			cortex_m::peripheral::NVIC::mask(nrf52840_hal::pac::Interrupt::USBD);
 			let (raise_usb, _raise_nfc) = usb_dispatcher.as_mut().unwrap().poll_apps(&mut [fido_app, admin_app], &mut [piv_app, prov_app]);
 			if raise_usb {
-				rtt_target::rprintln!("rUSB");
+				trace!("rUSB");
 				rtic::pend(nrf52840_hal::pac::Interrupt::USBD);
 			}
 			unsafe { cortex_m::peripheral::NVIC::unmask(nrf52840_hal::pac::Interrupt::USBD); }
@@ -315,7 +332,7 @@ const APP: () = {
 	fn late_setup_usb(ctx: late_setup_usb::Context) {
 		let late_setup_usb::Resources { pre_usb, mut usb, usb_dispatcher } = ctx.resources;
 
-		rtt_target::rprintln!("create USB");
+		trace!("create USB");
 		usb.lock(|usb| {
 			let usb_preinit = pre_usb.take().unwrap();
 			let ( usb_init, usb_dsp ) = usb::init(usb_preinit);
@@ -336,13 +353,13 @@ const APP: () = {
 
 	#[task(priority = 2, binds = SWI0_EGU0, resources = [trussed_service])]
 	fn irq_trussed(ctx: irq_trussed::Context) {
-		// rtt_target::rprintln!("irq SYS");
+		// trace!("irq SYS");
 		ctx.resources.trussed_service.process();
 	}
 
 	#[task(priority = 1, binds = GPIOTE, resources = [ui, gpiote, finger])]
 	fn irq_gpiote(ctx: irq_gpiote::Context) {
-		rtt_target::rprintln!("irq GPIO");
+		trace!("irq GPIO");
 		let latch_p0: u32;
 		let latch_p1: u32;
 		unsafe {
@@ -362,7 +379,7 @@ const APP: () = {
 	#[task(priority = 3, binds = USBD, resources = [usb])]
 	fn usb_handler(ctx: usb_handler::Context) {
 		let usb_handler::Resources { usb } = ctx.resources;
-		// rtt_target::rprintln!("irq USB {:x}", usb::usbd_debug_events());
+		// trace!("irq USB {:x}", usb::usbd_debug_events());
 
 		if let Some(usb_) = usb {
 			let e0 = Instant::now();
@@ -375,11 +392,11 @@ const APP: () = {
 
 			let ed = (e1 - e0).as_cycles();
 			if ed > 64_000 {
-				rtt_target::rprintln!("!! long top half: {:x} cyc", ed);
+				warn!("!! long top half: {:x} cyc", ed);
 			}
 
 			/*if (ev0 & ev1 & 0x00e0_0401) != 0 {
-				rtt_target::rprintln!("USB screams, {:x} -> {:x}", ev0, ev1);
+				warn!("USB screams, {:x} -> {:x}", ev0, ev1);
 			}
 			*/
 
@@ -390,7 +407,7 @@ const APP: () = {
 	#[task(priority = 4, binds = RTC0, resources = [rtc], spawn = [frontend, userspace_apps, comm_keepalives, try_system_off])]
 	fn rtc_handler(ctx: rtc_handler::Context) {
 		let rtc_count = ctx.resources.rtc.get_counter();
-		rtt_target::rprintln!("irq RTC {:x}", rtc_count);
+		debug!("irq RTC {:x}", rtc_count);
 		ctx.resources.rtc.reset_event(RtcInterrupt::Tick);
 		if (rtc_count % 2) == 0 {
 			ctx.spawn.comm_keepalives().ok();
@@ -411,7 +428,7 @@ const APP: () = {
 		let pwrM = power.mainregstatus.read().bits();
 		let pwrU = power.usbregstatus.read().bits();
 		let pof = power.pofcon.read().bits();
-		rtt_target::rprintln!("irq PWR {:x} {:x} {:x}", pwrM, pwrU, pof);
+		debug!("irq PWR {:x} {:x} {:x}", pwrM, pwrU, pof);
 
 		if power.events_usbdetected.read().events_usbdetected().bits() {
 			ctx.spawn.late_setup_usb().ok();
@@ -437,27 +454,27 @@ const APP: () = {
 
 		match c/8 {
 		60 => {
-			rtt_target::rprintln!("System OFF: UI");
+			debug!("System OFF: UI");
 			/* cut power to display */
 			ui.power_off();
 		}
 		70 => {
-			rtt_target::rprintln!("System OFF: FPR");
+			debug!("System OFF: FPR");
 			/* cut power to fingerprint */
 			finger.as_mut().unwrap().power_down().ok();
 		}
 		80 => {
-			rtt_target::rprintln!("System OFF: EXTFLASH");
+			debug!("System OFF: EXTFLASH");
 			/* cut power to external flash */
 			extflash.as_mut().unwrap().power_off();
 		}
 		90 => {
-			rtt_target::rprintln!("System OFF: SE050");
+			debug!("System OFF: SE050");
 			/* cut power to SE050 */
 			if let Some(se) = se050 { se.disable(); }
 		}
 		100 => {
-			rtt_target::rprintln!("System OFF: busses+clocks");
+			debug!("System OFF: busses+clocks");
 			unsafe {
 				let pac = nrf52840_hal::pac::Peripherals::steal();
 				pac.SPIM0.enable.write(|w| w.bits(0));
@@ -470,7 +487,7 @@ const APP: () = {
 			}
 		}
 		110 => {
-			rtt_target::rprintln!("System OFF: pins");
+			debug!("System OFF: pins");
 			unsafe {
 				let pac = nrf52840_hal::pac::Peripherals::steal();
 				for i in 0..64 {
@@ -498,7 +515,7 @@ const APP: () = {
 			}
 		}
 		120 => {
-			rtt_target::rprintln!("System OFF");
+			debug!("System OFF");
 			power.lock(|power|
 				{ power.systemoff.write(|w| unsafe { w.bits(1) }); }
 			);
@@ -569,9 +586,9 @@ fn setup_store(flash: flash::FlashStorage, reformat: bool) -> StickStore {
 	let store = StickStore::claim().unwrap();
 
 	if reformat {
-		rtt_target::rprintln!("mount+format");
+		info!("mount+format");
 	} else {
-		rtt_target::rprintln!("mount");
+		info!("mount");
 	}
 
 	store.mount(
@@ -584,7 +601,7 @@ fn setup_store(flash: flash::FlashStorage, reformat: bool) -> StickStore {
 		reformat
 	).expect("mount failed");
 
-	/*rtt_target::rprintln!("test-store");
+	/* debug!("test-store");
 	let foopath = littlefs2::path::PathBuf::from("/trussed/dat/rng-state.bin");
 	trussed::store::store(store, trussed::types::Location::Internal, &foopath, &[0u8; 32]).expect("foo store failed");
 	*/

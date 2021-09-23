@@ -50,17 +50,17 @@ impl<SPI> littlefs2::driver::Storage for ExtFlashStorage<SPI> where SPI: Transfe
 		let _buf: [u8; 4] = [0x03, (off >> 16) as u8, (off >> 8) as u8, off as u8];
 		// if spim.transfer_split_read(buft, bufr0, bufr1).is_err() {
 
-		// rtt_target::rprintln!("F RD {:x} {:x}", off, buf.len());
+		// trace!("F RD {:x} {:x}", off, buf.len());
 		Err(littlefs2::io::Error::Unknown(0x6565_6565))
 	}
 
 	fn write(&mut self, off: usize, buf: &[u8]) -> Result<usize, littlefs2::io::Error> {
-		// rtt_target::rprintln!("F WR {:x} {:x}", off, buf.len());
+		// trace!("F WR {:x} {:x}", off, buf.len());
 		Err(littlefs2::io::Error::Unknown(0x6565_6565))
 	}
 
 	fn erase(&mut self, off: usize, len: usize) -> Result<usize, littlefs2::io::Error> {
-		// rtt_target::rprintln!("F ER {:x} {:x}", off, len);
+		// trace!("F ER {:x} {:x}", off, len);
 		Err(littlefs2::io::Error::Unknown(0x6565_6565))
 	}
 }
@@ -82,13 +82,13 @@ impl<SPI> ExtFlashStorage<SPI> where SPI: Transfer<u8> /*+ TransferSplitRead<u8>
 		let mut jedec = [0u8; 12];
 		read_jedec(spim, &mut jedec);
 		if jedec != FLASH_PROPERTIES.flash_jedec {
-			rtt_target::rprintln!("FLASH JEDEC Mismatch: {:?}", jedec);
+			error!("FLASH JEDEC Mismatch: {:?}", jedec);
 			panic!("jedec");
 		}
 
 		let density = get_sfdp_attributes(spim);
 		if density >> 3 != FLASH_PROPERTIES.flash_size {
-			rtt_target::rprintln!("FLASH SIZE Mismatch: {:x}", density);
+			error!("FLASH SIZE Mismatch: {:x}", density);
 			panic!("density");
 		}
 	}

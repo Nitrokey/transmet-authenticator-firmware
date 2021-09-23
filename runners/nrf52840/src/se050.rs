@@ -3,7 +3,6 @@ use nrf52840_hal::{
 	prelude::{_embedded_hal_blocking_delay_DelayMs, OutputPin},
 	twim::{Error as TwimError, Twim},
 };
-use rtt_target;
 use asm_delay::bitrate::*;
 
 const I2CS_SE050_ADDRESS: u8 = 0x48;
@@ -83,11 +82,11 @@ impl<T> Se050<T> where T: nrf52840_hal::twim::Instance {
 	pub fn enable(&mut self) -> Result<(), SeError> {
 		let mut atr: [u8; 40] = [0u8; 40];
 
-		rtt_target::rprintln!("SE050 Up");
+		trace!("SE050 Up");
 		self.power_pin.set_high().map_err(|_| SeError::PinError)?;
-		rtt_target::rprintln!("SE050 REQ");
+		trace!("SE050 REQ");
 		self.send_request(T1_S_CODES::IF_SOFT_RESET as u8, None)?;
-		rtt_target::rprintln!("SE050 RSP");
+		trace!("SE050 RSP");
 		self.get_response(T1_S_CODES::IF_SOFT_RESET as u8, Some(&mut atr))?;
 
 		self.atr_info.replace(Se050ATR {
@@ -95,7 +94,7 @@ impl<T> Se050<T> where T: nrf52840_hal::twim::Instance {
 				minpoll_ms: atr[19],
 				ifsc: u8be16!(atr[12], atr[13]),
 		});
-		rtt_target::rprintln!("SE050 ATR: {} {} {}", self.atr_info.as_ref().unwrap().blockwait_ms, self.atr_info.as_ref().unwrap().minpoll_ms, self.atr_info.as_ref().unwrap().ifsc);
+		debug!("SE050 ATR: {} {} {}", self.atr_info.as_ref().unwrap().blockwait_ms, self.atr_info.as_ref().unwrap().minpoll_ms, self.atr_info.as_ref().unwrap().ifsc);
 
 		Ok(())
 	}

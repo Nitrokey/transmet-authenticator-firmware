@@ -17,7 +17,7 @@ cortex-m-rt = "0.6"
 cortex-m-rtic = { path = "../../cortex-m-rtic" }
 cortex-m-semihosting = { version = "0.3", optional = true }
 asm-delay = "*"
-# delog = "0.1.1"
+delog = "0.1.2"
 # heapless = "0.6"
 # interchange = "0.2.0"
 # nb = "1"
@@ -63,11 +63,18 @@ littlefs2 = "0.3.1"
 
 [features]
 
-default = ["no-reset-time-window", "trussed/clients-5"]
+default = ["no-reset-time-window", "trussed/clients-5", "log-all"]
 
 # Allow resetting FIDO authenticator (and possibly others) even after 10s uptime
 no-reset-time-window = ["fido-authenticator/disable-reset-time-window"]
 no-encrypted-storage = []
+
+log-all = []
+log-debug = []
+log-info = []
+log-warn = []
+log-error = []
+log-none = []
 
 ### new features for our own NRF52 port
 board-nrfdk = []

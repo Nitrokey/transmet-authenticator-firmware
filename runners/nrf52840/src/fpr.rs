@@ -3,7 +3,6 @@ use nrf52840_hal::{
 	prelude::{OutputPin},
 	uarte::Uarte,
 };
-use rtt_target;
 
 const FPR_MAGIC: u16 = 0xef01;
 const FPR_ADDRESS: u32 = 0xffff_ffff;
@@ -34,22 +33,22 @@ impl<T> FingerprintReader<T> where T: nrf52840_hal::uarte::Instance {
 		self.power_pin.set_low().ok();
 		let mut ready: [u8; 1] = [0];
 
-		rtt_target::rprintln!("FPR: on, awaiting ready");
+		debug!("FPR: on, awaiting ready");
 		self.uart.read(&mut ready).ok();
 		if ready[0] != 0x55 {
 			return Err(FPRError::InitFailed);
 		}
 
-		rtt_target::rprintln!("FPR: setting PLC");
+		debug!("FPR: setting PLC");
 		let ssp_plc: [u8; 3] = [0x0e, 6, 3];		/* Packet Length Coeff. -> 3 (Data Packets 256B each) */
 		self.command(&ssp_plc, &mut ready)?;
-		rtt_target::rprintln!("FPR: PLC response {:02x}", ready[0]);
+		debug!("FPR: PLC response {:02x}", ready[0]);
 
 		Ok(())
 	}
 
 	pub fn power_down(&mut self) -> Result<(), FPRError> {
-		rtt_target::rprintln!("FPR: off");
+		debug!("FPR: off");
 		self.power_pin.set_high().ok();
 		Ok(())
 	}
@@ -95,7 +94,7 @@ impl<T> FingerprintReader<T> where T: nrf52840_hal::uarte::Instance {
 
 		// TODO: check for packet types (continuation / final data packets)
 
-		rtt_target::rprintln!("_fpr rsp {:02x} {:02x}{:02x}", rsphdr[6], rsphdr[7], rsphdr[8]);
+		trace!("_fpr rsp {:02x} {:02x}{:02x}", rsphdr[6], rsphdr[7], rsphdr[8]);
 		let rsplen: usize = (((rsphdr[7] as u16) << 8) | (rsphdr[8] as u16)) as usize;
 		if rsplen > 64 {
 			return Err(FPRError::BufferOverrun);

@@ -52,7 +52,7 @@ pub fn init(preinit: USBPreinitObjects) -> (USBObjects<'static>, USBDispatcher) 
 	unsafe { USBD.replace(Usbd::new(usb_peripheral)); }
 	let usbd_ref = unsafe { USBD.as_ref().unwrap() };
 
-	rtt_target::rprintln!("USB: Glbl ok");
+	trace!("USB: Glbl ok");
 
 	/* Class #1: CCID */
 	let (ccid_rq, ccid_rp) = apdu_dispatch::interchanges::Contact::claim().unwrap();
@@ -77,7 +77,7 @@ pub fn init(preinit: USBPreinitObjects) -> (USBObjects<'static>, USBDispatcher) 
 			.composite_with_iads()
 			.build();
 
-	rtt_target::rprintln!("USB: Objx ok");
+	trace!("USB: Objx ok");
 
 	( USBObjects { usbdevice, ccid_class: ccid, ctaphid_class: ctaphid },
 		USBDispatcher { apdu_dispatch, ctaphid_dispatch } )
@@ -93,11 +93,11 @@ impl USBObjects<'static> {
 
 	pub fn send_keepalives(&mut self) {
 		if let usbd_ctaphid::types::Status::ReceivedData(_) = self.ctaphid_class.did_start_processing() {
-			rtt_target::rprintln!("-KeepH");
+			debug!("-KeepH");
 			// self.ctaphid_class.send_keepalive(false);
 		}
 		if let usbd_ccid::types::Status::ReceivedData(_) = self.ccid_class.did_start_processing() {
-			rtt_target::rprintln!("-KeepC");
+			debug!("+KeepC");
 			self.ccid_class.send_wait_extension();
 		}
 	}
