@@ -5,7 +5,6 @@ use panic_halt as _;
 // use cortex_m;
 use asm_delay::bitrate::U32BitrateExt;
 use embedded_hal::prelude::_embedded_hal_blocking_delay_DelayMs;
-use generic_array::typenum::consts;
 use littlefs2::const_ram_storage;
 use nrf52840_hal::{
 	clocks::Clocks,
@@ -385,11 +384,11 @@ const APP: () = {
 
 		if let Some(usb_) = usb {
 			let e0 = Instant::now();
-			let ev0 = usb::usbd_debug_events();
+			// let ev0 = usb::usbd_debug_events();
 
 			usb_.poll();
 
-			let ev1 = usb::usbd_debug_events();
+			// let ev1 = usb::usbd_debug_events();
 			let e1 = Instant::now();
 
 			let ed = (e1 - e0).as_cycles();
@@ -404,10 +403,10 @@ const APP: () = {
 				[22]	usbevent
 				[23]	ep0setup
 				[24] --	epdata
-			*/
+			//
 			if (ev0 & ev1 & 0x00e0_0401) != 0 {
 				warn!("USB screams, {:x} -> {:x}", ev0, ev1);
-			}
+			} */
 
 			usb_.send_keepalives();
 		}
