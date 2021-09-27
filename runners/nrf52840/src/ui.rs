@@ -124,18 +124,6 @@ impl StickUI {
 		self.state = StickUIState::PoweredDown;
 	}
 
-	pub fn check_buttons(&self, latches: &[u32]) {
-		for i in 0..8 {
-			if self.buttons[i].is_none() {
-				break;
-			}
-			let buttonref = self.buttons[i].as_ref().unwrap();
-			if crate::types::is_pin_latched(buttonref, latches) {
-				info!("Button {}", i);
-			}
-		}
-	}
-
 	fn rgb16_memset(&mut self, color: Rgb565) {
 		// holy cow, Rust type inference/annotation is so sh*tty...
 		let c: u16 = Into::<RawU16>::into(color).into_inner();

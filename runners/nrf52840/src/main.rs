@@ -242,7 +242,7 @@ const APP: () = {
 		let fprx = {
 		if board_gpio.fpr_power.is_some() {
 			debug!("Fingerprint Reader");
-			let fprx_ = fpr::FingerprintReader::new(uart,
+			let fprx_ = fpr::FingerprintReader::new(uart, 0xffff_ffffu32,
 						board_gpio.fpr_power.take().unwrap(),
 						board_gpio.fpr_detect.take().unwrap());
 			Some(fprx_)
@@ -359,21 +359,34 @@ const APP: () = {
 
 	#[task(priority = 1, binds = GPIOTE, resources = [ui, gpiote, finger])]
 	fn irq_gpiote(ctx: irq_gpiote::Context) {
-		trace!("irq GPIO");
-		let latch_p0: u32;
-		let latch_p1: u32;
+		let irq_gpiote::Resources { ui, gpiote, finger } = ctx.resources;
+		let sources: u32;
+		let val_p0: u32;
+		let val_p1: u32;
 		unsafe {
 			let pacp = nrf52840_hal::pac::Peripherals::steal();
-			latch_p0 = pacp.P0.latch.read().bits();
-			pacp.P0.latch.write(|w| w.bits(latch_p0));
-			latch_p1 = pacp.P1.latch.read().bits();
-			pacp.P1.latch.write(|w| w.bits(latch_p1));
+			val_p0 = pacp.P0.in_.read().bits();
+			val_p1 = pacp.P1.in_.read().bits();
+			sources = board::gpio_irq_sources(&[val_p0, val_p1]);
 		}
-		ctx.resources.ui.check_buttons(&[latch_p0, latch_p1]);
-		if ctx.resources.finger.as_ref().unwrap().check_detect(&[latch_p0, latch_p1]) {
-			ctx.resources.finger.as_mut().unwrap().power_up().ok();
+		debug!("irq GPIO {:x} {:x} -> {:x}", val_p0, val_p1, sources);
+		// let buttons = ui.check_buttons(&[latch_p0, latch_p1]);
+		if let Some(finger_) = finger {
+			if (sources & 0b0000_0100) != 0 {
+				finger_.power_up().ok();
+				finger_.erase().ok();
+				finger_.power_down().ok();
+			} else if (sources & 0b1_0000_0000) != 0 {
+				finger_.power_up().ok();
+				if finger_.is_enrolled() {
+					finger_.verify().ok();
+				} else {
+					finger_.enrol().ok();
+				}
+				finger_.power_down().ok();
+			}
 		}
-		ctx.resources.gpiote.reset_events();
+		gpiote.reset_events();
 	}
 
 	#[task(priority = 3, binds = USBD, resources = [usb])]

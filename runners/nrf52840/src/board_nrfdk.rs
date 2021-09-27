@@ -113,3 +113,18 @@ pub fn is_keepalive_pin(pinport: u32) -> bool {
 	(pinport == 0x27) ||
 	(pinport == 0x28)
 }
+
+pub fn gpio_irq_sources(dir: &[u32]) -> u32 {
+	let mut src: u32 = 0;
+	fn bit_set(x: u32, y: u32) -> bool { (x & (1u32 << y)) != 0 }
+
+	if !bit_set(dir[0], 11) { src |= 0b0000_0001; }
+	if !bit_set(dir[0], 12) { src |= 0b0000_0010; }
+	if !bit_set(dir[0], 24) { src |= 0b0000_0100; }
+	if !bit_set(dir[0], 25) { src |= 0b0000_1000; }
+	if !bit_set(dir[1],  8) { src |= 0b0001_0000; }
+	if !bit_set(dir[1],  7) { src |= 0b0010_0000; }
+	if !bit_set(dir[1],  6) { src |= 0b0100_0000; }
+	if !bit_set(dir[1],  5) { src |= 0b1000_0000; }
+	src
+}

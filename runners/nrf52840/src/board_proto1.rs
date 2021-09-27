@@ -100,9 +100,21 @@ pub fn init_gpio(gpiote: &Gpiote, gpio_p0: p0::Parts, gpio_p1: p1::Parts) -> Boa
 	}
 }
 
+/* these pins will not be disconnected from their input buffer during System OFF */
 pub fn is_keepalive_pin(pinport: u32) -> bool {
 	(pinport == 0x29) ||
 	(pinport == 0x2b) ||
 	(pinport == 0x2d) ||
 	(pinport == 0x2f)
+}
+
+pub fn gpio_irq_sources(dir: &[u32]) -> u32 {
+	let mut src: u32 = 0;
+	fn bit_set(x: u32, y: u32) -> bool { (x & (1u32 << y)) != 0 }
+
+	if !bit_set(dir[1], 11) { src |= 0b0000_0001; }
+	if !bit_set(dir[1], 13) { src |= 0b0000_0010; }
+	if !bit_set(dir[1], 15) { src |= 0b0000_0100; }
+	if  bit_set(dir[1],  9) { src |= 0b1_0000_0000; }
+	src
 }
