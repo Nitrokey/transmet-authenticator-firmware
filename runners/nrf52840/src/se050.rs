@@ -21,11 +21,17 @@ pub struct Se050<T> {
 	power_pin: Pin<Output<PushPull>>,
 	atr_info: Option<Se050ATR>,
 	delay_provider: asm_delay::AsmDelay,
+	iseq_snd: u8,
+	iseq_rcv: u8,
 }
 
 #[allow(dead_code,non_camel_case_types)]
+#[repr(u8)]
 /* bit (1<<5): 0 in request, 1 in response; in this enum always 0 */
-pub enum T1_S_CODES {
+pub enum T1_CODES {
+	I_		= 0b0000_0000,	// bit6: N(S), bit5: M
+	R_		= 0b1000_0000,	// bit0-1: error, bit4: N(R)
+	/* S codes */
 	RESYNC		= 0b1100_0000,
 	IFS		= 0b1100_0001,
 	ABORT		= 0b1100_0010,
@@ -34,6 +40,8 @@ pub enum T1_S_CODES {
 	CHIP_RESET	= 0b1100_0110,
 	GET_ATR		= 0b1100_0111,
 	IF_SOFT_RESET	= 0b1100_1111,
+	/* S response bit */
+	S_RESPONSE	= 0b0010_0000,
 }
 
 #[derive(Debug)]
@@ -76,7 +84,12 @@ impl<T> Se050<T> where T: nrf52840_hal::twim::Instance {
 
 
 	pub fn new(twi: Twim<T>, pwr_pin: Pin<Output<PushPull>>) -> Se050<T> {
-		Se050 { twi: twi, power_pin: pwr_pin, atr_info: None, delay_provider: asm_delay::AsmDelay::new(64_u32.mhz()) }
+		Se050 { twi: twi,
+			power_pin: pwr_pin,
+			atr_info: None,
+			delay_provider: asm_delay::AsmDelay::new(64_u32.mhz()),
+			iseq_snd: 0u8,
+			iseq_rcv: 0u8 }
 	}
 
 	pub fn enable(&mut self) -> Result<(), SeError> {
@@ -85,9 +98,9 @@ impl<T> Se050<T> where T: nrf52840_hal::twim::Instance {
 		trace!("SE050 Up");
 		self.power_pin.set_high().map_err(|_| SeError::PinError)?;
 		trace!("SE050 REQ");
-		self.send_request(T1_S_CODES::IF_SOFT_RESET as u8, None)?;
+		self.send_request(T1_CODES::IF_SOFT_RESET as u8, None)?;
 		trace!("SE050 RSP");
-		self.get_response(T1_S_CODES::IF_SOFT_RESET as u8, Some(&mut atr))?;
+		self.get_response(T1_CODES::IF_SOFT_RESET as u8 | T1_CODES::S_RESPONSE as u8, Some(&mut atr))?;
 
 		self.atr_info.replace(Se050ATR {
 				blockwait_ms: u8be16!(atr[10], atr[11]),
@@ -103,7 +116,42 @@ impl<T> Se050<T> where T: nrf52840_hal::twim::Instance {
 		self.power_pin.set_low().ok();
 	}
 
+	pub fn get_applet_id(&mut self) {
+		let mut r: Result<(), SeError>;
+		let apdu_select: [u8; 22] = [0x00, 0xa4, 0x04, 0x00, 0x10,
+			0xA0, 0x00, 0x00, 0x03, 0x96, 0x54, 0x53, 0x00,
+			0x00, 0x00, 0x01, 0x03, 0x00, 0x00, 0x00, 0x00,
+			0x00];
+		let mut resp_select: [u8; 16] = [0; 16];
+		/* expect: (T=1 hdr) A50009 (R-APDU body) 0301016FFF010B (R-APDU trailer) 9000 */
+			/* applet version: 3.1.1 */
+			/* features: 6FFF = everything, but we're (probably) in FIPS mode */
+			/* securebox version: 1.11 */
+
+		r = self.send_apdu(&apdu_select);
+		if r.is_err() {
+			debug!("SE050 SendApdu -> {:?}", r.err().unwrap());
+			return;
+		}
+		r = self.get_response((T1_CODES::I_ as u8) | (self.iseq_rcv << 6), Some(&mut resp_select));
+		if r.is_err() {
+			debug!("SE050 RecvApdu -> {:?}", r.err().unwrap());
+			return;
+		}
+		debug!("SE050 GP SELECT: {}", hexstr!(&resp_select));
+	}
+
 	/* Intermediate-Level request/response handlers */
+
+	fn send_apdu(&mut self, apdu: &[u8]) -> Result<(), SeError> {
+		if apdu.len() > 255 {
+			todo!();
+		} else {
+			let code: u8 = (T1_CODES::I_ as u8) | (self.iseq_snd << 6);
+			self.iseq_snd ^= 1;
+			self.send_request(code, Some(apdu))
+		}
+	}
 
 	fn send_request(&mut self, code: u8, buf: Option<&[u8]>) -> Result<(), SeError> {
 		let mut txbuf: [u8; 256] = [0u8; 256];
@@ -132,9 +180,11 @@ impl<T> Se050<T> where T: nrf52840_hal::twim::Instance {
 		self.recv_retry_anack(&mut rxbuf[0..3])?;
 
 		if rxbuf[0] != T1_NAD_SE2HD {
+			debug!("SE050 unexp. NAD {:02x}", rxbuf[0]);
 			return Err(SeError::ProtocolError);
 		}
-		if rxbuf[1] != (code | (1 << 5)) {
+		if rxbuf[1] != code {
+			debug!("SE050 unexp. PCB {:02x}", rxbuf[1]);
 			return Err(SeError::ProtocolError);
 		}
 
@@ -143,17 +193,19 @@ impl<T> Se050<T> where T: nrf52840_hal::twim::Instance {
 
 		if buf.is_some() {
 			let buf_ = buf.unwrap();
-			for i in 0..core::cmp::min(rlen-2, buf_.len()) {
+			for i in 0..core::cmp::min(3+rlen-2, buf_.len()) {
 				buf_[i] = rxbuf[i];
 			}
 
-			if buf_.len() < rlen-2 {
+			if buf_.len() < 3+rlen-2 {
+				debug!("SE050 buffer overflow {} < {}", buf_.len(), rlen-2);
 				return Err(SeError::BufferOverrun(rlen as u32));
 			}
 		}
 
-		let crc = crc16_ccitt(&rxbuf[0..3+rlen-2]);
-		if (rxbuf[3+rlen-1] != (crc >> 8) as u8) || (rxbuf[3+rlen-2] != (crc as u8)) {
+		let crc_calc = crc16_ccitt(&rxbuf[0..3+rlen-2]);
+		let crc_pkt = u8be16!(rxbuf[3+rlen-1], rxbuf[3+rlen-2]);
+		if crc_pkt != crc_calc {
 			return Err(SeError::ChecksumError);
 		}
 

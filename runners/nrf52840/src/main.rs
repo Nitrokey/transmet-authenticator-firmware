@@ -357,9 +357,9 @@ const APP: () = {
 		ctx.resources.trussed_service.process();
 	}
 
-	#[task(priority = 1, binds = GPIOTE, resources = [ui, gpiote, finger])]
+	#[task(priority = 1, binds = GPIOTE, resources = [ui, gpiote, finger, se050])]
 	fn irq_gpiote(ctx: irq_gpiote::Context) {
-		let irq_gpiote::Resources { ui, gpiote, finger } = ctx.resources;
+		let irq_gpiote::Resources { ui, gpiote, finger, se050 } = ctx.resources;
 		let sources: u32;
 		let val_p0: u32;
 		let val_p1: u32;
@@ -385,6 +385,9 @@ const APP: () = {
 				}
 				finger_.power_down().ok();
 			}
+		}
+		if (sources & 0b0000_0010) != 0 && se050.is_some() {
+			se050.as_mut().unwrap().get_applet_id();
 		}
 		gpiote.reset_events();
 	}
