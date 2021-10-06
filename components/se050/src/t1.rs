@@ -1,11 +1,5 @@
 use crate::types::*;
-use core::convert::{Into, TryInto};
-
-pub trait T1Proto {
-	fn send_apdu(&mut self, apdu: &Apdu) -> Result<(), T1Error>;
-	fn receive_apdu<'a>(&mut self, buf: &'a mut [u8], apdu: &'a mut Apdu) -> Result<(), T1Error>;
-	fn interface_soft_reset(&mut self) -> Result<AnswerToReset, T1Error>;
-}
+use core::convert::{Into, TryInto, TryFrom};
 
 pub struct T1overI2C<TWI> where TWI: embedded_hal::blocking::i2c::Read + embedded_hal::blocking::i2c::Write {
 	twi: TWI,
@@ -34,11 +28,13 @@ impl<TWI> T1overI2C<TWI> where TWI: embedded_hal::blocking::i2c::Read + embedded
 		let crc: u16 = crc16_ccitt_oneshot(&buf[0..3+data.len()]);
 		set_u16_le(&mut buf[3+data.len()..3+data.len()+2], crc);
 
+		trace!("T1 W S {}", hexstr!(&buf[0..3+data.len()+2]));
 		self.twi.write(self.se_address as u8, &buf[0..3+data.len()+2]).map_err(|_| T1Error::TransmitError)
 	}
 
 	fn receive_s(&mut self, code: T1SCode, data: &mut [u8]) -> Result<(), T1Error> {
 		self.twi.read(self.se_address as u8, &mut data[0..3]).map_err(|_| T1Error::ReceiveError)?;
+		trace!("T1 R S H {}", hexstr!(&data[0..3]));
 		if data[0] != self.nad_se2hd {
 			return Err(T1Error::ProtocolError);
 		}
@@ -57,6 +53,7 @@ impl<TWI> T1overI2C<TWI> where TWI: embedded_hal::blocking::i2c::Read + embedded
 		}
 
 		self.twi.read(self.se_address as u8, &mut data[0..dlen+2]).map_err(|_| T1Error::ReceiveError)?;
+		trace!("T1 R S B {}", hexstr!(&data[0..dlen+2]));
 		crc = crc16_ccitt_update(crc, &data[0..dlen+2]);
 		crc = crc16_ccitt_final(crc);
 
@@ -71,21 +68,64 @@ impl<TWI> T1overI2C<TWI> where TWI: embedded_hal::blocking::i2c::Read + embedded
 impl<TWI> T1Proto for T1overI2C<TWI> where TWI: embedded_hal::blocking::i2c::Read + embedded_hal::blocking::i2c::Write {
 
 	#[inline(never)]
-	fn send_apdu(&mut self, apdu: &Apdu) -> Result<(), T1Error> {
-		// convert apdu struct into [u8] stream
-		// prepend T=1 header (NAD, PCB, LEN)
-		// calculate and append T=1 CRC16
-		// pass to TWI
-		Ok(())
+	fn send_apdu(&mut self, apdu: &CApdu, le: u8) -> Result<(), T1Error> {
+		let mut apdubuf: [u8; 260] = [0u8; 260];
+		if apdu.data.len() > 248 { todo!(); }
+		apdubuf[0] = self.nad_hd2se;
+		apdubuf[1] = self.iseq_snd << 6;
+		apdubuf[2] = (4 + apdu.data.len() + 2) as u8;
+		apdubuf[3] = apdu.cla.into();
+		apdubuf[4] = apdu.ins;
+		apdubuf[5] = apdu.p1;
+		apdubuf[6] = apdu.p2;
+		apdubuf[7] = apdu.data.len() as u8;
+		for i in 0..apdu.data.len() {
+			apdubuf[8+i] = apdu.data[i];
+		}
+		apdubuf[8+apdu.data.len()] = le;
+		let crc = crc16_ccitt_oneshot(&apdubuf[0..8+apdu.data.len()+1]);
+		set_u16_le(&mut apdubuf[8+apdu.data.len()+1..8+apdu.data.len()+3], crc);
+
+		self.iseq_snd ^= 1;
+		trace!("T1 W I {}", hexstr!(&apdubuf[0..8+apdu.data.len()+3]));
+		self.twi.write(self.se_address as u8, &apdubuf[0..8+apdu.data.len()+3]).map_err(|_| T1Error::TransmitError)
 	}
 
 	#[inline(never)]
-	fn receive_apdu<'a>(&mut self, buf: &'a mut [u8], apdu: &'a mut Apdu) -> Result<(), T1Error> {
-		// receive from TWI into buf (split_at_mut(3)...)
-		// parse T=1 header, check PCB (actually APDU?)
-			// if found to be S:WTX, directly respond and wait again?
-		// check CRC16
-		// fill in apdu struct from buf payload
+	fn receive_apdu<'a, 'b>(&mut self, buf: &'b mut [u8], apdu: &'a mut RApdu<'b>) -> Result<(), T1Error> {
+		self.twi.read(self.se_address as u8, &mut buf[0..3]).map_err(|_| T1Error::ReceiveError)?;
+		trace!("T1 R I H {}", hexstr!(&buf[0..3]));
+		if buf[0] != self.nad_se2hd {
+			return Err(T1Error::ProtocolError);
+		}
+		if buf[1] != self.iseq_rcv << 6 {
+			if buf[1] == T1_S_REQUEST_CODE | <T1SCode as Into<u8>>::into(T1SCode::WTX) {
+				// TODO: if found to be S:WTX, directly respond and wait again?
+				todo!();
+			}
+			return Err(T1Error::ProtocolError);
+		}
+		self.iseq_rcv ^= 1;
+		let dlen: usize = buf[2] as usize;
+		let mut crc: u16 = crc16_ccitt_init();
+		crc = crc16_ccitt_update(crc, &buf[0..3]);
+
+		if dlen+2 > buf.len() {
+			return Err(T1Error::BufferOverrunError(dlen));
+		}
+
+		self.twi.read(self.se_address as u8, &mut buf[0..dlen+2]).map_err(|_| T1Error::ReceiveError)?;
+		trace!("T1 R I B {}", hexstr!(&buf[0..dlen+2]));
+		crc = crc16_ccitt_update(crc, &buf[0..dlen+2]);
+		crc = crc16_ccitt_final(crc);
+
+		if crc != get_u16_le(&buf[dlen..dlen+2]) {
+			return Err(T1Error::ChecksumError);
+		}
+
+		apdu.data = &buf[0..dlen-2];
+		apdu.sw = get_u16_be(&buf[dlen-2..dlen]);
+
 		Ok(())
 	}
 
@@ -121,7 +161,7 @@ impl<TWI> T1Proto for T1overI2C<TWI> where TWI: embedded_hal::blocking::i2c::Rea
 				segt_us: get_u16_be(&atrbuf[21..23]),
 				wut_us: get_u16_be(&atrbuf[23..25])
 			}),
-			historical_bytes: atrbuf[25..57].try_into().unwrap()
+			historical_bytes: atrbuf[25..40].try_into().unwrap()
 		})
 	}
 }

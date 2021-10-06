@@ -1,3 +1,6 @@
+extern crate delog;
+delog::generate_macros!();
+
 mod types;
 mod t1;
 mod se050;
