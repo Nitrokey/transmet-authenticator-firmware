@@ -13,4 +13,10 @@ embedded-hal = "*"
 
 [features]
 default = []
-# std = []
+
+log-all = []
+log-debug = []
+log-info = []
+log-warn = []
+log-error = []
+log-none = []

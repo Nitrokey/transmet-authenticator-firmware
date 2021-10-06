@@ -195,7 +195,7 @@ pub struct Se050<T, DP> where T: T1Proto, DP: embedded_hal::blocking::delay::Del
 	t1_proto: T,
 	atr_info: Option<AnswerToReset>,
 	app_info: Option<Se050AppInfo>,
-	delay_provider: DP,
+	_delay_provider: DP,
 }
 
 impl<T, DP> Se050<T, DP> where T: T1Proto, DP: embedded_hal::blocking::delay::DelayMs<u32> {
@@ -205,7 +205,7 @@ impl<T, DP> Se050<T, DP> where T: T1Proto, DP: embedded_hal::blocking::delay::De
 			t1_proto: t1,
 			atr_info: None,
 			app_info: None,
-			delay_provider: dp,
+			_delay_provider: dp,
 		}
 	}
 
@@ -216,7 +216,7 @@ impl<T, DP> Se050<T, DP> where T: T1Proto, DP: embedded_hal::blocking::delay::De
 		}
 
 		self.atr_info = r.ok();
-		debug!("SE050 ATR: {}", self.atr_info.unwrap());
+		debug!("SE050 ATR: {:?}", self.atr_info.as_ref().unwrap());
 		let app_id: [u8; 16] = [0xA0, 0x00, 0x00, 0x03, 0x96, 0x54, 0x53, 0x00,
                         		0x00, 0x00, 0x01, 0x03, 0x00, 0x00, 0x00, 0x00];
 		let app_select_apdu = CApdu::new(
@@ -225,7 +225,7 @@ impl<T, DP> Se050<T, DP> where T: T1Proto, DP: embedded_hal::blocking::delay::De
 			0x04, 0x00, &app_id);
 		self.t1_proto.send_apdu(&app_select_apdu, 0).map_err(|_| Se050Error::UnknownError)?;
 
-		let mut appid_data: [u8; 9] = [0; 9];
+		let mut appid_data: [u8; 11] = [0; 11];
 		let mut appid_apdu = RApdu::blank();
 
 		self.t1_proto.receive_apdu(&mut appid_data, &mut appid_apdu).map_err(|_| Se050Error::UnknownError)?;
@@ -233,6 +233,7 @@ impl<T, DP> Se050<T, DP> where T: T1Proto, DP: embedded_hal::blocking::delay::De
 		let adata = appid_apdu.data;
 		let asw = appid_apdu.sw;
 		if asw != 0x9000 || adata.len() != 7 {
+			debug!("SE050 App Err: {:?} {:x}", hexstr!(adata), asw);
 			return Err(Se050Error::UnknownError);
 		}
 
@@ -241,7 +242,7 @@ impl<T, DP> Se050<T, DP> where T: T1Proto, DP: embedded_hal::blocking::delay::De
 				features: get_u16_be(&adata[3..5]),
 				securebox_version: get_u16_be(&adata[5..7])
 		});
-		debug!("SE050 App: {}", self.app_info.unwrap());
+		debug!("SE050 App: {:?}", self.app_info.as_ref().unwrap());
 
 		Ok(())
 	}
@@ -250,5 +251,24 @@ impl<T, DP> Se050<T, DP> where T: T1Proto, DP: embedded_hal::blocking::delay::De
 		// send S:EndApduSession
 		// receive ACK
 		// power down
+	}
+
+	pub fn get_random(&mut self, buf: &mut [u8]) -> Result<(), Se050Error> {
+		if buf.len() > 250 { todo!(); }
+		let tlv1: [u8; 4] = [Se050TlvTag::Tag1.into(), 0x02, 0x00, buf.len() as u8];
+		let capdu = CApdu::new(
+			ApduClass::ProprietaryPlain,
+			Se050ApduInstruction::Mgmt.into(),
+			Se050ApduP1CredType::Default.into(),
+			Se050ApduP2::Random.into(),
+			&tlv1);
+		self.t1_proto.send_apdu(&capdu, 0).map_err(|_| Se050Error::UnknownError)?;
+
+		let mut rapdu_buf: [u8; 260] = [0; 260];
+		let mut rapdu = RApdu::blank();
+		self.t1_proto.receive_apdu(&mut rapdu_buf, &mut rapdu).map_err(|_| Se050Error::UnknownError)?;
+
+		// TODO: parse returned TLV, copy data into caller-provided slice
+		Ok(())
 	}
 }

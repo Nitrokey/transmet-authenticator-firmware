@@ -18,6 +18,7 @@ use nrf52840_hal::{
 };
 use rand_core::SeedableRng;
 use rtic::cyccnt::Instant;
+use se050;
 use trussed::{
 	Interchange,
 	types::{LfsResult, LfsStorage},
@@ -37,7 +38,6 @@ mod board;
 mod extflash;
 mod flash;
 mod fpr;
-mod se050;
 mod types;
 mod ui;
 mod usb;
@@ -106,7 +106,8 @@ const APP: () = {
 		#[init(None)]
 		usb_dispatcher: Option<usb::USBDispatcher>,
 		extflash: Option<extflash::ExtFlashStorage<nrf52840_hal::spim::Spim<nrf52840_hal::pac::SPIM3>>>,
-		se050: Option<se050::Se050<nrf52840_hal::pac::TWIM1>>,
+		// se050: Option<se050::Se050<nrf52840_hal::pac::TWIM1>>,
+		se050: Option<se050::Se050<se050::T1overI2C<nrf52840_hal::twim::Twim<nrf52840_hal::pac::TWIM1>, Nrf52840Delay>, Nrf52840Delay>>,
 		power: nrf52840_hal::pac::POWER,
 		rtc: Rtc<nrf52840_hal::pac::RTC0>,
 		fido_app: dispatch_fido::Fido<fido_authenticator::NonSilentAuthenticator, TrussedNRFClient>,
@@ -144,6 +145,8 @@ const APP: () = {
 		ctx.device.POWER.resetreas.write(|w| w);
 
 		board::init_early(&ctx.device, &ctx.core);
+
+		NRFDelogger::flush();
 
 		debug!("Peripheral Wrappers");
 
@@ -191,10 +194,15 @@ const APP: () = {
 
 		let se050 = if board_gpio.se_pins.is_some() {
 			let twim1 = Twim::new(ctx.device.TWIM1, board_gpio.se_pins.take().unwrap(), nrf52840_hal::twim::Frequency::K400);
-			let mut secelem = se050::Se050::new(twim1, board_gpio.se_power.take().unwrap());
+			let t1 = se050::T1overI2C::new(twim1, Nrf52840Delay {}, 0x48, 0x5a);
+			let mut secelem = se050::Se050::new(t1, Nrf52840Delay {});
+			board_gpio.se_power.as_mut().unwrap().set_high().ok();
+			board_delay(1u32);
 			secelem.enable().expect("SE050 ERROR");
 			Some(secelem)
 		} else { None };
+
+		NRFDelogger::flush();
 
 		debug!("Internal Flash");
 
@@ -359,7 +367,7 @@ const APP: () = {
 
 	#[task(priority = 1, binds = GPIOTE, resources = [ui, gpiote, finger, se050])]
 	fn irq_gpiote(ctx: irq_gpiote::Context) {
-		let irq_gpiote::Resources { ui, gpiote, finger, se050 } = ctx.resources;
+		let irq_gpiote::Resources { ui: _, gpiote, finger, se050 } = ctx.resources;
 		let sources: u32;
 		let val_p0: u32;
 		let val_p1: u32;
@@ -387,7 +395,8 @@ const APP: () = {
 			}
 		}
 		if (sources & 0b0000_0010) != 0 && se050.is_some() {
-			se050.as_mut().unwrap().get_applet_id();
+			let mut rndbuf: [u8; 16] = [0; 16];
+			se050.as_mut().unwrap().get_random(&mut rndbuf);
 		}
 		gpiote.reset_events();
 	}

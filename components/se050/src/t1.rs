@@ -1,8 +1,11 @@
 use crate::types::*;
-use core::convert::{Into, TryInto, TryFrom};
+use core::convert::{Into, TryInto};
 
-pub struct T1overI2C<TWI> where TWI: embedded_hal::blocking::i2c::Read + embedded_hal::blocking::i2c::Write {
+pub struct T1overI2C<TWI, DP> where
+		TWI: embedded_hal::blocking::i2c::Read + embedded_hal::blocking::i2c::Write,
+		DP: embedded_hal::blocking::delay::DelayMs<u32> {
 	twi: TWI,
+	delay_provider: DP,
 	se_address: u16,
 	nad_hd2se: u8,
 	nad_se2hd: u8,
@@ -10,10 +13,50 @@ pub struct T1overI2C<TWI> where TWI: embedded_hal::blocking::i2c::Read + embedde
 	iseq_rcv: u8,
 }
 
-impl<TWI> T1overI2C<TWI> where TWI: embedded_hal::blocking::i2c::Read + embedded_hal::blocking::i2c::Write {
-	pub fn new(twi: TWI, address: u16, nad: u8) -> Self {
+const TWI_RETRIES: usize = 128;
+const TWI_RETRY_DELAY_MS: u32 = 2;
+
+impl<TWI, DP> T1overI2C<TWI, DP> where
+		TWI: embedded_hal::blocking::i2c::Read + embedded_hal::blocking::i2c::Write,
+		DP: embedded_hal::blocking::delay::DelayMs<u32> {
+	pub fn new(twi: TWI, dp: DP, address: u16, nad: u8) -> Self {
 		let nad_r: u8 = ((nad & 0xf0) >> 4) | ((nad & 0x0f) << 4);
-		T1overI2C { twi, se_address: address, nad_hd2se: nad, nad_se2hd: nad_r, iseq_snd: 0, iseq_rcv: 0 }
+		T1overI2C { twi,
+			delay_provider: dp,
+			se_address: address,
+			nad_hd2se: nad,
+			nad_se2hd: nad_r,
+			iseq_snd: 0, iseq_rcv: 0 }
+	}
+
+	fn twi_write(&mut self, data: &[u8]) -> Result<(), T1Error> {
+		for i in 0..TWI_RETRIES {
+			let e = self.twi.write(self.se_address as u8, data);
+			if e.is_ok() {
+				trace!("t1w ok({})", i);
+				return Ok(());
+			}
+			self.delay_provider.delay_ms(TWI_RETRY_DELAY_MS);
+			// TODO: we should only loop on AddressNack errors
+			// but the existing traits don't provide an API for that
+		}
+		trace!("t1w err");
+		return Err(T1Error::TransmitError);
+	}
+
+	fn twi_read(&mut self, data: &mut [u8]) -> Result<(), T1Error> {
+		for i in 0..TWI_RETRIES {
+			let e = self.twi.read(self.se_address as u8, data);
+			if e.is_ok() {
+				trace!("t1r ok({})", i);
+				return Ok(());
+			}
+			self.delay_provider.delay_ms(TWI_RETRY_DELAY_MS);
+			// TODO: we should only loop on AddressNack errors
+			// but the existing traits don't provide an API for that
+		}
+		trace!("t1r err");
+		return Err(T1Error::ReceiveError);
 	}
 
 	fn send_s(&mut self, code: T1SCode, data: &[u8]) -> Result<(), T1Error> {
@@ -29,11 +72,11 @@ impl<TWI> T1overI2C<TWI> where TWI: embedded_hal::blocking::i2c::Read + embedded
 		set_u16_le(&mut buf[3+data.len()..3+data.len()+2], crc);
 
 		trace!("T1 W S {}", hexstr!(&buf[0..3+data.len()+2]));
-		self.twi.write(self.se_address as u8, &buf[0..3+data.len()+2]).map_err(|_| T1Error::TransmitError)
+		self.twi_write(&buf[0..3+data.len()+2])
 	}
 
 	fn receive_s(&mut self, code: T1SCode, data: &mut [u8]) -> Result<(), T1Error> {
-		self.twi.read(self.se_address as u8, &mut data[0..3]).map_err(|_| T1Error::ReceiveError)?;
+		self.twi_read(&mut data[0..3])?;
 		trace!("T1 R S H {}", hexstr!(&data[0..3]));
 		if data[0] != self.nad_se2hd {
 			return Err(T1Error::ProtocolError);
@@ -52,9 +95,9 @@ impl<TWI> T1overI2C<TWI> where TWI: embedded_hal::blocking::i2c::Read + embedded
 			return Err(T1Error::BufferOverrunError(dlen));
 		}
 
-		self.twi.read(self.se_address as u8, &mut data[0..dlen+2]).map_err(|_| T1Error::ReceiveError)?;
+		self.twi_read(&mut data[0..dlen+2])?;
 		trace!("T1 R S B {}", hexstr!(&data[0..dlen+2]));
-		crc = crc16_ccitt_update(crc, &data[0..dlen+2]);
+		crc = crc16_ccitt_update(crc, &data[0..dlen]);
 		crc = crc16_ccitt_final(crc);
 
 		if crc != get_u16_le(&data[dlen..dlen+2]) {
@@ -65,7 +108,9 @@ impl<TWI> T1overI2C<TWI> where TWI: embedded_hal::blocking::i2c::Read + embedded
 	}
 }
 
-impl<TWI> T1Proto for T1overI2C<TWI> where TWI: embedded_hal::blocking::i2c::Read + embedded_hal::blocking::i2c::Write {
+impl<TWI, DP> T1Proto for T1overI2C<TWI, DP> where
+		TWI: embedded_hal::blocking::i2c::Read + embedded_hal::blocking::i2c::Write,
+		DP: embedded_hal::blocking::delay::DelayMs<u32> {
 
 	#[inline(never)]
 	fn send_apdu(&mut self, apdu: &CApdu, le: u8) -> Result<(), T1Error> {
@@ -88,12 +133,12 @@ impl<TWI> T1Proto for T1overI2C<TWI> where TWI: embedded_hal::blocking::i2c::Rea
 
 		self.iseq_snd ^= 1;
 		trace!("T1 W I {}", hexstr!(&apdubuf[0..8+apdu.data.len()+3]));
-		self.twi.write(self.se_address as u8, &apdubuf[0..8+apdu.data.len()+3]).map_err(|_| T1Error::TransmitError)
+		self.twi_write(&apdubuf[0..8+apdu.data.len()+3])
 	}
 
 	#[inline(never)]
 	fn receive_apdu<'a, 'b>(&mut self, buf: &'b mut [u8], apdu: &'a mut RApdu<'b>) -> Result<(), T1Error> {
-		self.twi.read(self.se_address as u8, &mut buf[0..3]).map_err(|_| T1Error::ReceiveError)?;
+		self.twi_read(&mut buf[0..3])?;
 		trace!("T1 R I H {}", hexstr!(&buf[0..3]));
 		if buf[0] != self.nad_se2hd {
 			return Err(T1Error::ProtocolError);
@@ -114,9 +159,9 @@ impl<TWI> T1Proto for T1overI2C<TWI> where TWI: embedded_hal::blocking::i2c::Rea
 			return Err(T1Error::BufferOverrunError(dlen));
 		}
 
-		self.twi.read(self.se_address as u8, &mut buf[0..dlen+2]).map_err(|_| T1Error::ReceiveError)?;
+		self.twi_read(&mut buf[0..dlen+2])?;
 		trace!("T1 R I B {}", hexstr!(&buf[0..dlen+2]));
-		crc = crc16_ccitt_update(crc, &buf[0..dlen+2]);
+		crc = crc16_ccitt_update(crc, &buf[0..dlen]);
 		crc = crc16_ccitt_final(crc);
 
 		if crc != get_u16_le(&buf[dlen..dlen+2]) {
@@ -155,11 +200,11 @@ impl<TWI> T1Proto for T1overI2C<TWI> where TWI: embedded_hal::blocking::i2c::Rea
 			},
 			plp: PhysicalLayerParameters::I2C(I2CParameters {
 				mcf: get_u16_be(&atrbuf[13..15]),
-				configuration: atrbuf[16],
-				mpot_ms: atrbuf[17],
-				rfu: atrbuf[18..21].try_into().unwrap(),
-				segt_us: get_u16_be(&atrbuf[21..23]),
-				wut_us: get_u16_be(&atrbuf[23..25])
+				configuration: atrbuf[15],
+				mpot_ms: atrbuf[16],
+				rfu: atrbuf[17..20].try_into().unwrap(),
+				segt_us: get_u16_be(&atrbuf[20..22]),
+				wut_us: get_u16_be(&atrbuf[22..24])
 			}),
 			historical_bytes: atrbuf[25..40].try_into().unwrap()
 		})

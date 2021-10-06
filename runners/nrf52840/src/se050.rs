@@ -82,7 +82,6 @@ macro_rules! u8be16 {
 
 impl<T> Se050<T> where T: nrf52840_hal::twim::Instance {
 
-
 	pub fn new(twi: Twim<T>, pwr_pin: Pin<Output<PushPull>>) -> Se050<T> {
 		Se050 { twi: twi,
 			power_pin: pwr_pin,
