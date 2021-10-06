@@ -210,13 +210,16 @@ impl<T, DP> Se050<T, DP> where T: T1Proto, DP: embedded_hal::blocking::delay::De
 	}
 
 	pub fn enable(&mut self) -> Result<(), Se050Error> {
+		/* Step 1: perform interface soft reset, parse ATR */
 		let r = self.t1_proto.interface_soft_reset();
 		if r.is_err() {
+			error!("SE050 Interface Reset Error");
 			return Err(Se050Error::UnknownError);
 		}
-
 		self.atr_info = r.ok();
 		debug!("SE050 ATR: {:?}", self.atr_info.as_ref().unwrap());
+
+		/* Step 2: send GP SELECT to choose SE050 JCOP APP, parse APP version */
 		let app_id: [u8; 16] = [0xA0, 0x00, 0x00, 0x03, 0x96, 0x54, 0x53, 0x00,
                         		0x00, 0x00, 0x01, 0x03, 0x00, 0x00, 0x00, 0x00];
 		let app_select_apdu = CApdu::new(
@@ -227,13 +230,12 @@ impl<T, DP> Se050<T, DP> where T: T1Proto, DP: embedded_hal::blocking::delay::De
 
 		let mut appid_data: [u8; 11] = [0; 11];
 		let mut appid_apdu = RApdu::blank();
-
 		self.t1_proto.receive_apdu(&mut appid_data, &mut appid_apdu).map_err(|_| Se050Error::UnknownError)?;
 
 		let adata = appid_apdu.data;
 		let asw = appid_apdu.sw;
 		if asw != 0x9000 || adata.len() != 7 {
-			debug!("SE050 App Err: {:?} {:x}", hexstr!(adata), asw);
+			error!("SE050 GP SELECT Err: {:?} {:x}", hexstr!(adata), asw);
 			return Err(Se050Error::UnknownError);
 		}
 
@@ -253,6 +255,7 @@ impl<T, DP> Se050<T, DP> where T: T1Proto, DP: embedded_hal::blocking::delay::De
 		// power down
 	}
 
+	#[inline(never)]
 	pub fn get_random(&mut self, buf: &mut [u8]) -> Result<(), Se050Error> {
 		if buf.len() > 250 { todo!(); }
 		let tlv1: [u8; 4] = [Se050TlvTag::Tag1.into(), 0x02, 0x00, buf.len() as u8];
@@ -268,7 +271,34 @@ impl<T, DP> Se050<T, DP> where T: T1Proto, DP: embedded_hal::blocking::delay::De
 		let mut rapdu = RApdu::blank();
 		self.t1_proto.receive_apdu(&mut rapdu_buf, &mut rapdu).map_err(|_| Se050Error::UnknownError)?;
 
-		// TODO: parse returned TLV, copy data into caller-provided slice
-		Ok(())
+		if rapdu.sw != 0x9000 || rapdu.data[0] != Se050TlvTag::Tag1.into() {
+			error!("SE050 GetRandom Failed: {:x}", rapdu.sw);
+			return Err(Se050Error::UnknownError);
+		}
+
+		if rapdu.data[1] == 0x82 {
+			let rcvlen = get_u16_be(&rapdu.data[2..4]) as usize;
+			if rcvlen != buf.len() {
+				error!("SE050 GetRandom Length Mismatch");
+				return Err(Se050Error::UnknownError);
+			}
+			for i in 0..rcvlen {
+				buf[i] = rapdu.data[4+i];
+			}
+			Ok(())
+		} else if rapdu.data[1] < 0x80 {
+			let rcvlen: usize = rapdu.data[1] as usize;
+			if rcvlen != buf.len() {
+				error!("SE050 GetRandom Length Mismatch");
+				return Err(Se050Error::UnknownError);
+			}
+			for i in 0..rcvlen {
+				buf[i] = rapdu.data[2+i];
+			}
+			Ok(())
+		} else {
+			error!("SE050 GetRandom Invalid R-APDU Length");
+			Err(Se050Error::UnknownError)
+		}
 	}
 }

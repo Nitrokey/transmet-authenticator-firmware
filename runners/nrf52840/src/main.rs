@@ -396,7 +396,11 @@ const APP: () = {
 		}
 		if (sources & 0b0000_0010) != 0 && se050.is_some() {
 			let mut rndbuf: [u8; 16] = [0; 16];
-			se050.as_mut().unwrap().get_random(&mut rndbuf);
+			if se050.as_mut().unwrap().get_random(&mut rndbuf).is_ok() {
+				debug!("GetRandom from SE050: {:?}", hexstr!(&rndbuf));
+			} else {
+				debug!("GetRandom from SE050 failed");
+			}
 		}
 		gpiote.reset_events();
 	}
