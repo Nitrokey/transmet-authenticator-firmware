@@ -1,0 +1,33 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - dev
+      - main
+
+env:
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build-lpc55:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust:
+          - stable
+    steps:
+      - uses: actions/checkout@v1
+      - name: Install Rust dependencies
+        run: |
+          sudo apt update && sudo apt install build-essential -y
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.rust }}
+          override: true
+      - name: Test
+        run: |
+          cargo test --features std,log-all
+

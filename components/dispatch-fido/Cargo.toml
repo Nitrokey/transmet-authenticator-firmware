@@ -13,12 +13,14 @@ heapless-bytes = "0.3"
 interchange = "0.2.0"
 serde = { version = "1", default-features = false }
 
-apdu-dispatch = { git = "https://github.com/solokeys/apdu-dispatch", branch = "main" }
+# apdu-dispatch = { git = "https://github.com/solokeys/apdu-dispatch", branch = "main" }
+apdu-dispatch = { path = "../apdu-dispatch" }
 ctap-types = { git = "https://github.com/solokeys/ctap-types", branch = "main" }
 # fido-authenticator = { git = "https://github.com/solokeys/fido-authenticator", branch = "main" }
 fido-authenticator = { path = "../fido-authenticator" }
 iso7816 = { git = "https://github.com/ycrypto/iso7816", branch = "main" }
-trussed = { git = "https://github.com/trussed-dev/trussed", branch = "main" }
+# trussed = { git = "https://github.com/trussed-dev/trussed", branch = "main" }
+trussed = { path = "../../../trussed" }
 
 ctaphid-dispatch = {path = "../ctaphid-dispatch"}
 

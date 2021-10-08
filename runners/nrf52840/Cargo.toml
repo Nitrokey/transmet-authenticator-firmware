@@ -34,18 +34,21 @@ rand_core = "0.6"
 chacha20 = { version = "0.7", default-features = false, features = ["rng"] }
 se050 = { path = "../../components/se050", features = ["log-all"] }
 
-apdu-dispatch = { git = "https://github.com/solokeys/apdu-dispatch", branch = "main" }
+# apdu-dispatch = { git = "https://github.com/solokeys/apdu-dispatch", branch = "main" }
+apdu-dispatch = { path = "../../components/apdu-dispatch", features = ["log-all"] }
 ctap-types = { git = "https://github.com/solokeys/ctap-types", branch = "main" }
 # fido-authenticator = { git = "https://github.com/solokeys/fido-authenticator", branch = "main" }
 # oath-authenticator = { git = "https://github.com/trussed-dev/oath-authenticator", branch = "main", features = ["apdu-dispatch"], optional = true }
 # piv-authenticator = { git = "https://github.com/solokeys/piv-authenticator", branch = "main", features = ["apdu-dispatch"] }
-trussed = { git = "https://github.com/trussed-dev/trussed", branch = "main" }
+# trussed = { git = "https://github.com/trussed-dev/trussed", branch = "main" }
+trussed = { path = "../../../trussed" }
 
 # components
 dispatch-fido = {path = "../../components/dispatch-fido"}
 ndef-app = { path = "../../components/ndef-app", optional = true }
 admin-app = { path = "../../components/admin-app" }
 fido-authenticator = { path = "../../components/fido-authenticator" }
+oath-authenticator = { path = "../../components/oath-authenticator", features = ["apdu-dispatch"], optional = true }
 piv-authenticator = { path = "../../components/piv-authenticator", features = ["apdu-dispatch"] }
 # NB: when using this app, need to raise trussed/clients-5
 provisioner-app = { path = "../../components/provisioner-app", features = ["nrf52"] }
