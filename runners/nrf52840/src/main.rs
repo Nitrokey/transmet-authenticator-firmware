@@ -236,6 +236,7 @@ const APP: () = {
 		debug!("Trussed Service");
 
 		let mut srv = trussed::service::Service::new(stickplat);
+		srv.add_hwcrypto_provider(trussed::hwcrypto::se050::Se050Wrapper {} ); // se050
 
 		debug!("Apps");
 
@@ -583,26 +584,30 @@ fn instantiate_apps(srv: &mut trussed::service::Service<StickPlatform>, store: S
 	provisioner_app::Provisioner<StickStore, flash::FlashStorage, TrussedNRFClient>) {
 	let fido_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
 	let fido_lfs2_path = littlefs2::path::PathBuf::from("fido");
-	srv.add_endpoint(fido_trussed_xch.1, fido_lfs2_path).ok();
+	let fido_cid = trussed::types::ClientId { path: fido_lfs2_path, use_hwcrypto: true, pin: None };
+	srv.add_endpoint(fido_trussed_xch.1, fido_cid).ok();
 	let fido_trussed_client = TrussedNRFClient::new(fido_trussed_xch.0, NRFSyscall {});
 	let fido_auth = fido_authenticator::Authenticator::new(fido_trussed_client, fido_authenticator::NonSilentAuthenticator {});
 	let fido_app = dispatch_fido::Fido::<fido_authenticator::NonSilentAuthenticator, TrussedNRFClient>::new(fido_auth);
 
 	let admin_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
 	let admin_lfs2_path = littlefs2::path::PathBuf::from("admin");
-	srv.add_endpoint(admin_trussed_xch.1, admin_lfs2_path).ok();
+	let admin_cid = trussed::types::ClientId { path: admin_lfs2_path, use_hwcrypto: true, pin: None };
+	srv.add_endpoint(admin_trussed_xch.1, admin_cid).ok();
 	let admin_trussed_client = TrussedNRFClient::new(admin_trussed_xch.0, NRFSyscall {});
 	let admin_app = admin_app::App::<TrussedNRFClient, NRFReboot>::new(admin_trussed_client, device_uuid, 0x10203040);
 
 	let piv_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
 	let piv_lfs2_path = littlefs2::path::PathBuf::from("piv");
-	srv.add_endpoint(piv_trussed_xch.1, piv_lfs2_path).ok();
+	let piv_cid = trussed::types::ClientId { path: piv_lfs2_path, use_hwcrypto: true, pin: None };
+	srv.add_endpoint(piv_trussed_xch.1, piv_cid).ok();
 	let piv_trussed_client = TrussedNRFClient::new(piv_trussed_xch.0, NRFSyscall {});
 	let piv_app = piv_authenticator::Authenticator::<TrussedNRFClient, {apdu_dispatch::command::SIZE}>::new(piv_trussed_client);
 
 	let prov_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
 	let prov_lfs2_path = littlefs2::path::PathBuf::from("attn");
-	srv.add_endpoint(prov_trussed_xch.1, prov_lfs2_path).ok();
+	let prov_cid = trussed::types::ClientId { path: prov_lfs2_path, use_hwcrypto: true, pin: None };
+	srv.add_endpoint(prov_trussed_xch.1, prov_cid).ok();
 	let prov_trussed_client = TrussedNRFClient::new(prov_trussed_xch.0, NRFSyscall {});
 	let stolen_internal_fs = unsafe { &mut INTERNAL_STORAGE };
 	let prov_app = provisioner_app::Provisioner::<StickStore, flash::FlashStorage, TrussedNRFClient>::new(prov_trussed_client, store, stolen_internal_fs.as_mut().unwrap(), false);
