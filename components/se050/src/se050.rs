@@ -184,6 +184,12 @@ include!("se050_convs.rs");
 
 //////////////////////////////////////////////////////////////////////////////
 
+pub trait Se050Device {
+	fn enable(&mut self) -> Result<(), Se050Error>;
+	fn disable(&mut self);
+	fn get_random(&mut self, buf: &mut [u8]) -> Result<(), Se050Error>;
+}
+
 #[derive(Debug)]
 pub struct Se050AppInfo {
 	applet_version: u32,
@@ -209,7 +215,11 @@ impl<T, DP> Se050<T, DP> where T: T1Proto, DP: embedded_hal::blocking::delay::De
 		}
 	}
 
-	pub fn enable(&mut self) -> Result<(), Se050Error> {
+}
+
+impl<T, DP> Se050Device for Se050<T, DP> where T: T1Proto, DP: embedded_hal::blocking::delay::DelayMs<u32> {
+
+	fn enable(&mut self) -> Result<(), Se050Error> {
 		/* Step 1: perform interface soft reset, parse ATR */
 		let r = self.t1_proto.interface_soft_reset();
 		if r.is_err() {
@@ -249,14 +259,14 @@ impl<T, DP> Se050<T, DP> where T: T1Proto, DP: embedded_hal::blocking::delay::De
 		Ok(())
 	}
 
-	pub fn disable(&mut self) {
+	fn disable(&mut self) {
 		// send S:EndApduSession
 		// receive ACK
 		// power down
 	}
 
 	#[inline(never)]
-	pub fn get_random(&mut self, buf: &mut [u8]) -> Result<(), Se050Error> {
+	fn get_random(&mut self, buf: &mut [u8]) -> Result<(), Se050Error> {
 		if buf.len() > 250 { todo!(); }
 		let tlv1: [u8; 4] = [Se050TlvTag::Tag1.into(), 0x02, 0x00, buf.len() as u8];
 		let capdu = CApdu::new(
@@ -301,4 +311,5 @@ impl<T, DP> Se050<T, DP> where T: T1Proto, DP: embedded_hal::blocking::delay::De
 			Err(Se050Error::UnknownError)
 		}
 	}
+
 }

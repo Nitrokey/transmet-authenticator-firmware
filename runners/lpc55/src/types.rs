@@ -1,5 +1,4 @@
 include!(concat!(env!("OUT_DIR"), "/build_constants.rs"));
-use core::convert::TryInto;
 
 use crate::hal;
 use hal::drivers::timer;
@@ -139,9 +138,8 @@ pub trait TrussedApp: Sized {
         let (trussed_requester, trussed_responder) = trussed::pipe::TrussedInterchange::claim()
             .expect("could not setup TrussedInterchange");
 
-        let mut client_id = littlefs2::path::PathBuf::new();
-        client_id.push(Self::CLIENT_ID.try_into().unwrap());
-        assert!(trussed.add_endpoint(trussed_responder, trussed::types::ClientId { path: client_id, use_hwcrypto: false, pin: None }).is_ok());
+        let client_id: &str = core::str::from_utf8(Self::CLIENT_ID).unwrap();
+        assert!(trussed.add_endpoint(trussed_responder, trussed::types::ClientId::new(client_id)).is_ok());
 
         let syscaller = Syscall::default();
         let trussed_client = TrussedClient::new(

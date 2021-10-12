@@ -18,7 +18,7 @@ use nrf52840_hal::{
 };
 use rand_core::SeedableRng;
 use rtic::cyccnt::Instant;
-use se050;
+use se050::{Se050, Se050Device, T1overI2C};
 use trussed::{
 	Interchange,
 	types::{LfsResult, LfsStorage},
@@ -51,6 +51,8 @@ impl delog::Flusher for NRFDelogFlusher {
 }
 static NRFDELOG_FLUSHER: NRFDelogFlusher = NRFDelogFlusher {};
 delog::delog!(NRFDelogger, 2*1024, 512, NRFDelogFlusher);
+
+static mut SE050: Option<Se050<T1overI2C<nrf52840_hal::twim::Twim<nrf52840_hal::pac::TWIM1>, Nrf52840Delay>, Nrf52840Delay>> = None;
 
 /* TODO: add external flash */
 littlefs2::const_ram_storage!(ExternalRAMStore, 1024);
@@ -106,8 +108,7 @@ const APP: () = {
 		#[init(None)]
 		usb_dispatcher: Option<usb::USBDispatcher>,
 		extflash: Option<extflash::ExtFlashStorage<nrf52840_hal::spim::Spim<nrf52840_hal::pac::SPIM3>>>,
-		// se050: Option<se050::Se050<nrf52840_hal::pac::TWIM1>>,
-		se050: Option<se050::Se050<se050::T1overI2C<nrf52840_hal::twim::Twim<nrf52840_hal::pac::TWIM1>, Nrf52840Delay>, Nrf52840Delay>>,
+		// se050: Option<Se050<T1overI2C<nrf52840_hal::twim::Twim<nrf52840_hal::pac::TWIM1>, Nrf52840Delay>, Nrf52840Delay>>,
 		power: nrf52840_hal::pac::POWER,
 		rtc: Rtc<nrf52840_hal::pac::RTC0>,
 		fido_app: dispatch_fido::Fido<fido_authenticator::NonSilentAuthenticator, TrussedNRFClient>,
@@ -188,22 +189,6 @@ const APP: () = {
 				board_gpio.display_power.take());
 		let ui = ui::StickUI::new(disp, board_gpio.buttons, board_gpio.leds);
 
-		/* WIP: put together our hacked up LEGO bricks to create the Trussed service instance */
-
-		debug!("Secure Element");
-
-		let se050 = if board_gpio.se_pins.is_some() {
-			let twim1 = Twim::new(ctx.device.TWIM1, board_gpio.se_pins.take().unwrap(), nrf52840_hal::twim::Frequency::K400);
-			let t1 = se050::T1overI2C::new(twim1, Nrf52840Delay {}, 0x48, 0x5a);
-			let mut secelem = se050::Se050::new(t1, Nrf52840Delay {});
-			board_gpio.se_power.as_mut().unwrap().set_high().ok();
-			board_delay(1u32);
-			secelem.enable().expect("SE050 ERROR");
-			Some(secelem)
-		} else { None };
-
-		NRFDelogger::flush();
-
 		debug!("Internal Flash");
 
 		let stickflash = flash::FlashStorage::new(ctx.device.NVMC, 0x000E_0000 as *mut u32, flash::FLASH_SIZE as usize);
@@ -236,7 +221,29 @@ const APP: () = {
 		debug!("Trussed Service");
 
 		let mut srv = trussed::service::Service::new(stickplat);
-		srv.add_hwcrypto_provider(trussed::hwcrypto::se050::Se050Wrapper {} ); // se050
+
+		NRFDelogger::flush();
+
+		debug!("Secure Element");
+
+		if board_gpio.se_pins.is_some() {
+			let twim1 = Twim::new(ctx.device.TWIM1, board_gpio.se_pins.take().unwrap(), nrf52840_hal::twim::Frequency::K400);
+			let t1 = T1overI2C::new(twim1, Nrf52840Delay {}, 0x48, 0x5a);
+			let mut secelem = Se050::new(t1, Nrf52840Delay {});
+			board_gpio.se_power.as_mut().unwrap().set_high().ok();
+			board_delay(1u32);
+			secelem.enable().expect("SE050 ERROR");
+			unsafe {
+				SE050.replace(secelem);
+
+				let crypto_drivers = trussed::hwcrypto::HWCryptoDrivers {
+					se050: Some(trussed::hwcrypto::se050::Se050Wrapper { device: SE050.as_mut().unwrap() }),
+				};
+				srv.add_hwcrypto_drivers(crypto_drivers);
+			}
+		};
+
+		NRFDelogger::flush();
 
 		debug!("Apps");
 
@@ -275,7 +282,6 @@ const APP: () = {
 			finger: fprx,
 			pre_usb: Some(usb_preinit),
 			extflash: Some(stickextflash),
-			se050,
 			power,
 			rtc,
 			fido_app,
@@ -366,9 +372,9 @@ const APP: () = {
 		ctx.resources.trussed_service.process();
 	}
 
-	#[task(priority = 1, binds = GPIOTE, resources = [ui, gpiote, finger, se050])]
+	#[task(priority = 1, binds = GPIOTE, resources = [ui, gpiote, finger])]
 	fn irq_gpiote(ctx: irq_gpiote::Context) {
-		let irq_gpiote::Resources { ui: _, gpiote, finger, se050 } = ctx.resources;
+		let irq_gpiote::Resources { ui: _, gpiote, finger } = ctx.resources;
 		let sources: u32;
 		let val_p0: u32;
 		let val_p1: u32;
@@ -395,6 +401,7 @@ const APP: () = {
 				finger_.power_down().ok();
 			}
 		}
+/*
 		if (sources & 0b0000_0010) != 0 && se050.is_some() {
 			let mut rndbuf: [u8; 16] = [0; 16];
 			if se050.as_mut().unwrap().get_random(&mut rndbuf).is_ok() {
@@ -402,7 +409,7 @@ const APP: () = {
 			} else {
 				debug!("GetRandom from SE050 failed");
 			}
-		}
+		} */
 		gpiote.reset_events();
 	}
 
@@ -486,9 +493,9 @@ const APP: () = {
 		}
 	}
 
-	#[task(priority = 1, resources = [extflash, finger, ui, power, se050])]
+	#[task(priority = 1, resources = [extflash, finger, ui, power])]
 	fn try_system_off(ctx: try_system_off::Context, c: u32) {
-		let try_system_off::Resources { extflash, finger, ui, mut power, se050 } = ctx.resources;
+		let try_system_off::Resources { extflash, finger, ui, mut power } = ctx.resources;
 
 		match c/8 {
 		60 => {
@@ -506,11 +513,11 @@ const APP: () = {
 			/* cut power to external flash */
 			extflash.as_mut().unwrap().power_off();
 		}
-		90 => {
+		/*90 => {
 			debug!("System OFF: SE050");
 			/* cut power to SE050 */
 			if let Some(se) = se050 { se.disable(); }
-		}
+		}*/
 		100 => {
 			debug!("System OFF: busses+clocks");
 			unsafe {
@@ -583,30 +590,31 @@ fn instantiate_apps(srv: &mut trussed::service::Service<StickPlatform>, store: S
 	piv_authenticator::Authenticator<TrussedNRFClient, {apdu_dispatch::command::SIZE}>,
 	provisioner_app::Provisioner<StickStore, flash::FlashStorage, TrussedNRFClient>) {
 	let fido_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
-	let fido_lfs2_path = littlefs2::path::PathBuf::from("fido");
-	let fido_cid = trussed::types::ClientId { path: fido_lfs2_path, use_hwcrypto: true, pin: None };
+	// let fido_lfs2_path = littlefs2::path::PathBuf::from("fido");
+	let fido_cid = trussed::types::ClientId::new("fido");
 	srv.add_endpoint(fido_trussed_xch.1, fido_cid).ok();
 	let fido_trussed_client = TrussedNRFClient::new(fido_trussed_xch.0, NRFSyscall {});
 	let fido_auth = fido_authenticator::Authenticator::new(fido_trussed_client, fido_authenticator::NonSilentAuthenticator {});
 	let fido_app = dispatch_fido::Fido::<fido_authenticator::NonSilentAuthenticator, TrussedNRFClient>::new(fido_auth);
 
 	let admin_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
-	let admin_lfs2_path = littlefs2::path::PathBuf::from("admin");
-	let admin_cid = trussed::types::ClientId { path: admin_lfs2_path, use_hwcrypto: true, pin: None };
+	// let admin_lfs2_path = littlefs2::path::PathBuf::from("admin");
+	let mut admin_cid = trussed::types::ClientId::new("admin");
+	admin_cid.hwcrypto_params.se050 = Some(trussed::hwcrypto::se050::Se050CryptoParameters { pin: None });
 	srv.add_endpoint(admin_trussed_xch.1, admin_cid).ok();
 	let admin_trussed_client = TrussedNRFClient::new(admin_trussed_xch.0, NRFSyscall {});
 	let admin_app = admin_app::App::<TrussedNRFClient, NRFReboot>::new(admin_trussed_client, device_uuid, 0x10203040);
 
 	let piv_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
-	let piv_lfs2_path = littlefs2::path::PathBuf::from("piv");
-	let piv_cid = trussed::types::ClientId { path: piv_lfs2_path, use_hwcrypto: true, pin: None };
+	// let piv_lfs2_path = littlefs2::path::PathBuf::from("piv");
+	let piv_cid = trussed::types::ClientId::new("piv");
 	srv.add_endpoint(piv_trussed_xch.1, piv_cid).ok();
 	let piv_trussed_client = TrussedNRFClient::new(piv_trussed_xch.0, NRFSyscall {});
 	let piv_app = piv_authenticator::Authenticator::<TrussedNRFClient, {apdu_dispatch::command::SIZE}>::new(piv_trussed_client);
 
 	let prov_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
-	let prov_lfs2_path = littlefs2::path::PathBuf::from("attn");
-	let prov_cid = trussed::types::ClientId { path: prov_lfs2_path, use_hwcrypto: true, pin: None };
+	// let prov_lfs2_path = littlefs2::path::PathBuf::from("attn");
+	let prov_cid = trussed::types::ClientId::new("attn");
 	srv.add_endpoint(prov_trussed_xch.1, prov_cid).ok();
 	let prov_trussed_client = TrussedNRFClient::new(prov_trussed_xch.0, NRFSyscall {});
 	let stolen_internal_fs = unsafe { &mut INTERNAL_STORAGE };

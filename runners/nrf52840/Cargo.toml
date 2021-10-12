@@ -41,7 +41,7 @@ ctap-types = { git = "https://github.com/solokeys/ctap-types", branch = "main" }
 # oath-authenticator = { git = "https://github.com/trussed-dev/oath-authenticator", branch = "main", features = ["apdu-dispatch"], optional = true }
 # piv-authenticator = { git = "https://github.com/solokeys/piv-authenticator", branch = "main", features = ["apdu-dispatch"] }
 # trussed = { git = "https://github.com/trussed-dev/trussed", branch = "main" }
-trussed = { path = "../../../trussed" }
+trussed = { path = "../../../trussed", features = ["hwcrypto-se050"] }
 
 # components
 dispatch-fido = {path = "../../components/dispatch-fido"}
