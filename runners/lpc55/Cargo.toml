@@ -28,9 +28,11 @@ usbd-serial = "0.1.0"
 
 apdu-dispatch = { git = "https://github.com/solokeys/apdu-dispatch", branch = "main" }
 ctap-types = { git = "https://github.com/solokeys/ctap-types", branch = "main" }
-fido-authenticator = { git = "https://github.com/solokeys/fido-authenticator", branch = "main", optional = true }
+# fido-authenticator = { git = "https://github.com/solokeys/fido-authenticator", branch = "main", optional = true }
+fido-authenticator = {path = "../../components/fido-authenticator", optional = true }
 oath-authenticator = { git = "https://github.com/trussed-dev/oath-authenticator", branch = "main", features = ["apdu-dispatch"], optional = true }
-piv-authenticator = { git = "https://github.com/solokeys/piv-authenticator", branch = "main", features = ["apdu-dispatch"], optional = true }
+# piv-authenticator = { git = "https://github.com/solokeys/piv-authenticator", branch = "main", features = ["apdu-dispatch"], optional = true }
+piv-authenticator = {path = "../../components/piv-authenticator", features = ["apdu-dispatch"], optional = true }
 trussed = { git = "https://github.com/trussed-dev/trussed", branch = "main" }
 
 # board
