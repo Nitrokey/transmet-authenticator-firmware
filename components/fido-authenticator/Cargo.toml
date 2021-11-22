@@ -20,8 +20,11 @@ serde_cbor = { version = "0.11.0", default-features = false }
 serde-indexed = "0.1.0"
 
 ctap-types = { git = "https://github.com/solokeys/ctap-types", branch = "main" }
-# trussed = { git = "https://github.com/trussed-dev/trussed", branch = "main" }
-trussed = { path = "../../../trussed" }
+
+# By defualt pull from github repo. But you can also use local trussed path for
+# development. For example:
+# trussed = { path = "../../../trussed" }
+trussed = { git = "https://github.com/trussed-dev/trussed", branch = "main" }
 
 [features]
 enable-fido-pre = []
