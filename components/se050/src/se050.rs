@@ -188,6 +188,8 @@ pub trait Se050Device {
 	fn enable(&mut self) -> Result<(), Se050Error>;
 	fn disable(&mut self);
 	fn get_random(&mut self, buf: &mut [u8]) -> Result<(), Se050Error>;
+	fn write_aes_key(&mut self, key: &[u8]) -> Result<(), Se050Error>;
+	fn encrypt_aes_oneshot(&mut self, data: &[u8], enc: &mut [u8]) -> Result<(), Se050Error>;
 }
 
 #[derive(Debug)]
@@ -312,4 +314,93 @@ impl<T, DP> Se050Device for Se050<T, DP> where T: T1Proto, DP: embedded_hal::blo
 		}
 	}
 
+	#[inline(never)]
+	/* no support yet for rfc3394 key wrappings, policies or max attempts */
+	fn write_aes_key(&mut self, key: &[u8]) -> Result<(), Se050Error> {
+		if key.len() != 16 { todo!(); }
+		let mut tlvs: [u8; 2+4+2+16] = [Se050TlvTag::Tag1.into(), 0x04,
+					/* ObjID */ 0xae,0x50,0xae,0x50,
+					Se050TlvTag::Tag3.into(), 0x10,
+					/* key data */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+		tlvs[8..].clone_from_slice(key);
+		let capdu = CApdu::new(
+			ApduClass::ProprietaryPlain,
+			Into::<u8>::into(Se050ApduInstruction::Write) | APDU_INSTRUCTION_TRANSIENT,
+			Se050ApduP1CredType::AES.into(),
+			Se050ApduP2::Default.into(),
+			&tlvs);
+		self.t1_proto.send_apdu(&capdu, 0).map_err(|_| Se050Error::UnknownError)?;
+
+		let mut rapdu_buf: [u8; 260] = [0; 260];
+		let mut rapdu = RApdu::blank();
+		self.t1_proto.receive_apdu(&mut rapdu_buf, &mut rapdu).map_err(|_| Se050Error::UnknownError)?;
+
+		if rapdu.sw != 0x9000 {
+			error!("SE050 WriteAESKey Failed: {:x}", rapdu.sw);
+			return Err(Se050Error::UnknownError);
+		}
+
+		Ok(())
+	}
+
+	#[inline(never)]
+	/* hardcoded ObjID */
+	fn encrypt_aes_oneshot(&mut self, data: &[u8], enc: &mut [u8]) -> Result<(), Se050Error> {
+		if data.len() > 240 || (data.len() % 16 != 0) {
+			error!("Input data too long or unaligned");
+			return Err(Se050Error::UnknownError);
+		}
+		if enc.len() != data.len() {
+			error!("Insufficient output buffer");
+			return Err(Se050Error::UnknownError);
+		}
+		let mut tlvs: [u8; 254] = [0; 254];
+		tlvs[0..11].clone_from_slice(&[Se050TlvTag::Tag1.into(), 0x04,
+					/* ObjID */ 0xae,0x50,0xae,0x50,
+					Se050TlvTag::Tag2.into(), 0x01,
+					/* CipherMode */ 0x0d /* AES CBC NOPAD */,
+					Se050TlvTag::Tag3.into(), data.len() as u8]);
+		tlvs[11..(11+data.len())].clone_from_slice(data);
+		let capdu = CApdu::new(
+			ApduClass::ProprietaryPlain,
+			Se050ApduInstruction::Crypto.into(),
+			Se050ApduP1CredType::Cipher.into(),
+			Se050ApduP2::EncryptOneshot.into(),
+			&tlvs[0..(data.len()+11)]);
+		self.t1_proto.send_apdu(&capdu, 0).map_err(|_| Se050Error::UnknownError)?;
+
+		let mut rapdu_buf: [u8; 260] = [0; 260];
+		let mut rapdu = RApdu::blank();
+		self.t1_proto.receive_apdu(&mut rapdu_buf, &mut rapdu).map_err(|_| Se050Error::UnknownError)?;
+
+		if rapdu.sw != 0x9000 || rapdu.data[0] != Se050TlvTag::Tag1.into() {
+			error!("SE050 EncryptAESOneshot Failed: {:x}", rapdu.sw);
+			return Err(Se050Error::UnknownError);
+		}
+
+		if rapdu.data[1] == 0x82 {
+			let rcvlen = get_u16_be(&rapdu.data[2..4]) as usize;
+			if rcvlen != enc.len() {
+				error!("SE050 EncryptAESOneshot Length Mismatch");
+				return Err(Se050Error::UnknownError);
+			}
+			for i in 0..rcvlen {
+				enc[i] = rapdu.data[4+i];
+			}
+			Ok(())
+		} else if rapdu.data[1] < 0x80 {
+			let rcvlen: usize = rapdu.data[1] as usize;
+			if rcvlen != enc.len() {
+				error!("SE050 EncryptAESOneshot Length Mismatch");
+				return Err(Se050Error::UnknownError);
+			}
+			for i in 0..rcvlen {
+				enc[i] = rapdu.data[2+i];
+			}
+			Ok(())
+		} else {
+			error!("SE050 EncryptAESOneshot Invalid R-APDU Length");
+			Err(Se050Error::UnknownError)
+		}
+	}
 }

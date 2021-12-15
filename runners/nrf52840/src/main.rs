@@ -226,6 +226,7 @@ const APP: () = {
 
 		debug!("Secure Element");
 
+		#[cfg(feature = "hwcrypto-se050")]
 		if board_gpio.se_pins.is_some() {
 			let twim1 = Twim::new(ctx.device.TWIM1, board_gpio.se_pins.take().unwrap(), nrf52840_hal::twim::Frequency::K400);
 			let t1 = T1overI2C::new(twim1, Nrf52840Delay {}, 0x48, 0x5a);
@@ -233,6 +234,17 @@ const APP: () = {
 			board_gpio.se_power.as_mut().unwrap().set_high().ok();
 			board_delay(1u32);
 			secelem.enable().expect("SE050 ERROR");
+			NRFDelogger::flush();
+
+			{
+				debug!("AES TEST");
+				let buf1: [u8; 32] = [0; 32];
+				let mut buf2: [u8; 32] = [0; 32];
+				secelem.write_aes_key(&[0,1,2,3,4,5,6,7,0,1,2,3,4,5,6,7]);
+				secelem.encrypt_aes_oneshot(&buf1, &mut buf2);
+				debug!("RESULT: {:x}{:x}{:x}{:x}...", buf2[0], buf2[1], buf2[2], buf2[3]);
+			}
+
 			unsafe {
 				SE050.replace(secelem);
 
@@ -401,15 +413,7 @@ const APP: () = {
 				finger_.power_down().ok();
 			}
 		}
-/*
-		if (sources & 0b0000_0010) != 0 && se050.is_some() {
-			let mut rndbuf: [u8; 16] = [0; 16];
-			if se050.as_mut().unwrap().get_random(&mut rndbuf).is_ok() {
-				debug!("GetRandom from SE050: {:?}", hexstr!(&rndbuf));
-			} else {
-				debug!("GetRandom from SE050 failed");
-			}
-		} */
+
 		gpiote.reset_events();
 	}
 
@@ -513,11 +517,6 @@ const APP: () = {
 			/* cut power to external flash */
 			extflash.as_mut().unwrap().power_off();
 		}
-		/*90 => {
-			debug!("System OFF: SE050");
-			/* cut power to SE050 */
-			if let Some(se) = se050 { se.disable(); }
-		}*/
 		100 => {
 			debug!("System OFF: busses+clocks");
 			unsafe {
@@ -600,7 +599,10 @@ fn instantiate_apps(srv: &mut trussed::service::Service<StickPlatform>, store: S
 	let admin_trussed_xch = trussed::pipe::TrussedInterchange::claim().unwrap();
 	// let admin_lfs2_path = littlefs2::path::PathBuf::from("admin");
 	let mut admin_cid = trussed::types::ClientId::new("admin");
-	admin_cid.hwcrypto_params.se050 = Some(trussed::hwcrypto::se050::Se050CryptoParameters { pin: None });
+	#[cfg(feature = "hwcrypto-se050")]
+	{
+		admin_cid.hwcrypto_params.se050 = Some(trussed::hwcrypto::se050::Se050CryptoParameters { pin: None });
+	}
 	srv.add_endpoint(admin_trussed_xch.1, admin_cid).ok();
 	let admin_trussed_client = TrussedNRFClient::new(admin_trussed_xch.0, NRFSyscall {});
 	let admin_app = admin_app::App::<TrussedNRFClient, NRFReboot>::new(admin_trussed_client, device_uuid, 0x10203040);
